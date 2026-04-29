@@ -17,6 +17,8 @@ import { companies } from "./companies.js";
 import { heartbeatRuns } from "./heartbeat_runs.js";
 import { projectWorkspaces } from "./project_workspaces.js";
 import { executionWorkspaces } from "./execution_workspaces.js";
+import { rooms } from "./rooms.js";
+import { consensusDecisions } from "./rooms.js";
 
 export const issues = pgTable(
   "issues",
@@ -58,6 +60,9 @@ export const issues = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
     hiddenAt: timestamp("hidden_at", { withTimezone: true }),
+    sourceRoomId: uuid("source_room_id").references((): AnyPgColumn => rooms.id, { onDelete: "set null" }),
+    consensusDecisionId: uuid("consensus_decision_id").references((): AnyPgColumn => consensusDecisions.id, { onDelete: "set null" }),
+    correlationId: text("correlation_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
