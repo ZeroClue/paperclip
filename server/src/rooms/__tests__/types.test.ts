@@ -18,64 +18,92 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("RoomConfigSchema", () => {
-  it("accepts a valid config with all fields", () => {
-    const result = RoomConfigSchema.safeParse({
-      leaderAgentId: "550e8400-e29b-41d4-a716-446655440000",
-      daAgentId: "660e8400-e29b-41d4-a716-446655440001",
-      workerAgentIds: ["770e8400-e29b-41d4-a716-446655440002"],
-      systemPrompt: "You are a helpful project room assistant.",
-      maxDebateRounds: 3,
-      consensusThreshold: 0.8,
-      autoApproveSimple: true,
-      maxWorkers: 5,
-    });
+  const validConfig = {
+    leader: {
+      agentId: "550e8400-e29b-41d4-a716-446655440000",
+      systemPrompt: "You are the room leader coordinating tasks.",
+    },
+    devilsAdvocate: {
+      agentId: "660e8400-e29b-41d4-a716-446655440001",
+      systemPrompt: "You are the devil's advocate challenging proposals.",
+    },
+    workers: {
+      agentTemplate: {
+        systemPrompt: "You are a worker agent.",
+        model: "gpt-4",
+      },
+    },
+    consensus: {},
+  };
+
+  it("accepts a valid config with all top-level sections", () => {
+    const result = RoomConfigSchema.safeParse(validConfig);
     expect(result.success).toBe(true);
   });
 
-  it("accepts an empty config (all fields optional)", () => {
-    const result = RoomConfigSchema.safeParse({});
-    expect(result.success).toBe(true);
+  it("applies defaults for optional fields", () => {
+    const result = RoomConfigSchema.parse(validConfig);
+    expect(result.devilsAdvocate.aggressionLevel).toBe('medium');
+    expect(result.consensus.maxRounds).toBe(3);
+    expect(result.consensus.forceResolveStrategy).toBe('leader-decides');
+    expect(result.consensus.escalationThreshold).toBe(0.6);
+    expect(result.workers.count).toBe(1);
   });
 
-  it("applies defaults when optional fields are omitted", () => {
-    const result = RoomConfigSchema.parse({});
-    expect(result).toEqual({});
-  });
-
-  it("rejects unknown fields (strict mode)", () => {
+  it("rejects config missing required leader.agentId", () => {
     const result = RoomConfigSchema.safeParse({
-      unknownField: "value",
+      ...validConfig,
+      leader: { systemPrompt: "You are the room leader." },
     });
     expect(result.success).toBe(false);
   });
 
-  it("rejects systemPrompt shorter than 10 characters", () => {
+  it("rejects leader.systemPrompt shorter than 10 characters", () => {
     const result = RoomConfigSchema.safeParse({
-      systemPrompt: "too short",
+      ...validConfig,
+      leader: { agentId: "550e8400-e29b-41d4-a716-446655440000", systemPrompt: "short" },
     });
     expect(result.success).toBe(false);
   });
 
-  it("rejects maxDebateRounds outside 1-10 range", () => {
-    expect(RoomConfigSchema.safeParse({ maxDebateRounds: 0 }).success).toBe(false);
-    expect(RoomConfigSchema.safeParse({ maxDebateRounds: 11 }).success).toBe(false);
-  });
-
-  it("rejects consensusThreshold outside 0.5-1.0 range", () => {
-    expect(RoomConfigSchema.safeParse({ consensusThreshold: 0.3 }).success).toBe(false);
-    expect(RoomConfigSchema.safeParse({ consensusThreshold: 1.5 }).success).toBe(false);
+  it("rejects devilsAdvocate.systemPrompt shorter than 10 characters", () => {
+    const result = RoomConfigSchema.safeParse({
+      ...validConfig,
+      devilsAdvocate: { agentId: "660e8400-e29b-41d4-a716-446655440001", systemPrompt: "short" },
+    });
+    expect(result.success).toBe(false);
   });
 
   it("rejects non-UUID agent IDs", () => {
     const result = RoomConfigSchema.safeParse({
-      leaderAgentId: "not-a-uuid",
+      ...validConfig,
+      leader: { agentId: "not-a-uuid", systemPrompt: "You are the room leader." },
     });
     expect(result.success).toBe(false);
   });
 
-  it("rejects non-UUID entries in workerAgentIds", () => {
+  it("rejects workers.count outside 1-3 range", () => {
+    expect(
+      RoomConfigSchema.safeParse({ ...validConfig, workers: { ...validConfig.workers, count: 0 } }).success
+    ).toBe(false);
+    expect(
+      RoomConfigSchema.safeParse({ ...validConfig, workers: { ...validConfig.workers, count: 5 } }).success
+    ).toBe(false);
+  });
+
+  it("accepts optional budget section", () => {
     const result = RoomConfigSchema.safeParse({
-      workerAgentIds: ["valid-uuid-pattern", "not-valid"],
+      ...validConfig,
+      budget: { monthlyUsd: 200, warnThreshold: 0.9 },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects config missing required devilsAdvocate section", () => {
+    const result = RoomConfigSchema.safeParse({
+      leader: validConfig.leader,
+      workers: validConfig.workers,
+      consensus: validConfig.consensus,
     });
     expect(result.success).toBe(false);
   });
@@ -103,8 +131,18 @@ describe("CreateRoomSchema", () => {
       linkedProjectId: "660e8400-e29b-41d4-a716-446655440001",
       monthlyBudgetUsd: "500.0000",
       config: {
-        leaderAgentId: "770e8400-e29b-41d4-a716-446655440002",
-        systemPrompt: "A reasonable system prompt for the room.",
+        leader: {
+          agentId: "770e8400-e29b-41d4-a716-446655440002",
+          systemPrompt: "A reasonable system prompt for the room.",
+        },
+        devilsAdvocate: {
+          agentId: "880e8400-e29b-41d4-a716-446655440003",
+          systemPrompt: "Challenge proposals carefully.",
+        },
+        workers: {
+          agentTemplate: { systemPrompt: "Worker prompt", model: "gpt-4" },
+        },
+        consensus: {},
       },
     });
     expect(result.success).toBe(true);
@@ -147,7 +185,7 @@ describe("CreateRoomSchema", () => {
     const result = CreateRoomSchema.safeParse({
       name: "my-room",
       displayName: "My Room",
-      config: { maxDebateRounds: 0 },
+      config: { leader: { agentId: "not-a-uuid", systemPrompt: "short" } },
     });
     expect(result.success).toBe(false);
   });
@@ -160,7 +198,7 @@ describe("CreateRoomSchema", () => {
 describe("PostMessageSchema", () => {
   it("accepts required fields only", () => {
     const result = PostMessageSchema.safeParse({
-      type: MessageType.TASK_REQUEST,
+      type: MessageType.HUMAN,
       content: "Build a new feature",
     });
     expect(result.success).toBe(true);
@@ -179,7 +217,7 @@ describe("PostMessageSchema", () => {
 
   it("rejects empty content", () => {
     const result = PostMessageSchema.safeParse({
-      type: MessageType.TASK_REQUEST,
+      type: MessageType.HUMAN,
       content: "",
     });
     expect(result.success).toBe(false);
@@ -195,7 +233,7 @@ describe("PostMessageSchema", () => {
 
   it("rejects non-UUID linkedIssueIds", () => {
     const result = PostMessageSchema.safeParse({
-      type: MessageType.TASK_REQUEST,
+      type: MessageType.HUMAN,
       content: "some content",
       linkedIssueIds: ["not-a-uuid"],
     });
@@ -298,11 +336,11 @@ describe("Enums", () => {
     expect(Object.keys(RoomState)).toHaveLength(7);
   });
 
-  it("MessageType has 14 values", () => {
-    expect(Object.keys(MessageType)).toHaveLength(14);
+  it("MessageType has 15 values", () => {
+    expect(Object.keys(MessageType)).toHaveLength(15);
   });
 
-  it("ErrorClass has 5 values", () => {
-    expect(Object.keys(ErrorClass)).toHaveLength(5);
+  it("ErrorClass has 3 values", () => {
+    expect(Object.keys(ErrorClass)).toHaveLength(3);
   });
 });

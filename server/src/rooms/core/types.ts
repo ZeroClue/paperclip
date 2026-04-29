@@ -25,28 +25,27 @@ export const VALID_TRANSITIONS: Record<RoomState, RoomState[]> = {
 };
 
 export enum MessageType {
-  TASK_REQUEST = "TASK_REQUEST",
-  TASK_CLARIFICATION = "TASK_CLARIFICATION",
-  LEADER_PROPOSAL = "LEADER_PROPOSAL",
-  DA_CHALLENGE = "DA_CHALLENGE",
-  DA_APPROVAL = "DA_APPROVAL",
-  LEADER_REVISION = "LEADER_REVISION",
-  CONSENSUS_REACHED = "CONSENSUS_REACHED",
-  CONSENSUS_FAILED = "CONSENSUS_FAILED",
-  TASK_DELEGATION = "TASK_DELEGATION",
-  WORKER_OUTPUT = "WORKER_OUTPUT",
-  WORKER_ERROR = "WORKER_ERROR",
-  SYNTHESIS = "SYNTHESIS",
-  SYSTEM = "SYSTEM",
-  CONTROL = "CONTROL",
+  HUMAN = 'human',
+  SYSTEM = 'system',
+  LEADER_PROPOSAL = 'leader_proposal',
+  DA_CHALLENGE = 'da_challenge',
+  DA_AGREE = 'da_agree',
+  LEADER_REVISION = 'leader_revision',
+  CONSENSUS_REACHED = 'consensus_reached',
+  CONSENSUS_FORCED = 'consensus_forced',
+  CONSENSUS_BYPASSED = 'consensus_bypassed',
+  TASK_CREATED = 'task_created',
+  WORKER_STARTED = 'worker_started',
+  WORKER_COMPLETED = 'worker_completed',
+  WORKER_FAILED = 'worker_failed',
+  SYNTHESIS = 'synthesis',
+  ERROR = 'error',
 }
 
 export enum ErrorClass {
-  BAD_REQUEST = "BAD_REQUEST",
-  NOT_FOUND = "NOT_FOUND",
-  DUPLICATE = "DUPLICATE",
-  INVALID_TRANSITION = "INVALID_TRANSITION",
-  INTERNAL = "INTERNAL",
+  TRANSIENT = 'TRANSIENT',
+  PERMANENT = 'PERMANENT',
+  AGENT_CRASH = 'AGENT_CRASH',
 }
 
 // ---------------------------------------------------------------------------
@@ -134,15 +133,39 @@ export interface WorkerSession {
 // ---------------------------------------------------------------------------
 
 export const RoomConfigSchema = z.object({
-  leaderAgentId: z.string().uuid().optional(),
-  daAgentId: z.string().uuid().optional(),
-  workerAgentIds: z.array(z.string().uuid()).optional(),
-  systemPrompt: z.string().min(10).optional(),
-  maxDebateRounds: z.number().int().min(1).max(10).optional(),
-  consensusThreshold: z.number().min(0.5).max(1.0).optional(),
-  autoApproveSimple: z.boolean().optional(),
-  maxWorkers: z.number().int().min(1).max(20).optional(),
-}).strict();
+  leader: z.object({
+    agentId: z.string().uuid(),
+    systemPrompt: z.string().min(10),
+    model: z.string().optional(),
+    thinkingLevel: z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
+  }),
+  devilsAdvocate: z.object({
+    agentId: z.string().uuid(),
+    systemPrompt: z.string().min(10),
+    model: z.string().optional(),
+    aggressionLevel: z.enum(['low', 'medium', 'high']).default('medium'),
+  }),
+  workers: z.object({
+    count: z.number().int().min(1).max(3).default(1),
+    agentTemplate: z.object({
+      systemPrompt: z.string(),
+      model: z.string(),
+    }),
+    piConfig: z.object({
+      extensions: z.array(z.string()).default([]),
+      skills: z.array(z.string()).default([]),
+    }).optional(),
+  }),
+  consensus: z.object({
+    maxRounds: z.number().int().min(1).max(5).default(3),
+    forceResolveStrategy: z.enum(['leader-decides', 'escalate-to-operator']).default('leader-decides'),
+    escalationThreshold: z.number().min(0).max(1).default(0.6),
+  }),
+  budget: z.object({
+    monthlyUsd: z.number().min(0).default(100),
+    warnThreshold: z.number().min(0).max(1).default(0.8),
+  }).optional(),
+});
 
 export type RoomConfig = z.infer<typeof RoomConfigSchema>;
 
