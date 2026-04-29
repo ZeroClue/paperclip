@@ -212,6 +212,8 @@ export interface RoomListItem {
   spentUsd: string;
   monthlyBudgetUsd: string;
   updatedAt: Date;
+  messageCount: number;
+  lastActivityAt: Date | null;
 }
 
 export interface PostMessageResponse {

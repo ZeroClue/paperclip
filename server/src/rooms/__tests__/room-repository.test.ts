@@ -78,6 +78,22 @@ function matchCondition(row: MockRow, cond: unknown): boolean {
 
   const c = cond as Record<string, unknown>;
 
+  // Handle Drizzle sql template objects — extract the roomIds array
+  // and check if the row's roomId is in it
+  if (c.queryChunks || (Array.isArray(c.queryChunks))) {
+    // sql template with embedded values — check for ANY(${roomIds}) pattern
+    const chunks = c.queryChunks as unknown[];
+    for (const chunk of chunks) {
+      if (Array.isArray(chunk) && chunk.length > 0 && typeof chunk[0] === "string") {
+        // This is likely the roomIds array
+        const roomIds = chunk as string[];
+        return roomIds.includes(row.roomId as string);
+      }
+    }
+    // Fallback: pass through (can't determine filter)
+    return true;
+  }
+
   if (c._type === "eq") {
     const colName = symbolToColName(c.col as symbol);
     if (!colName) return true;
@@ -130,6 +146,8 @@ class QueryChain implements PromiseLike<MockRow[]> {
   private orderDir: "asc" | "desc" = "asc";
   private limitCount = 1000;
   private selectFields: Record<string, symbol> | null = null;
+  private selectFieldEntries: Array<[string, unknown]> | null = null;
+  private groupByCol: symbol | null = null;
   private resolved = false;
 
   // -- chainable methods --
@@ -160,6 +178,11 @@ class QueryChain implements PromiseLike<MockRow[]> {
     return this;
   }
 
+  groupBy(col: symbol): this {
+    this.groupByCol = col;
+    return this;
+  }
+
   // -- PromiseLike interface --
 
   then<TResult1 = MockRow[], TResult2 = never>(
@@ -184,6 +207,36 @@ class QueryChain implements PromiseLike<MockRow[]> {
     // Apply where filter
     if (this.whereCond) {
       results = results.filter((row) => matchCondition(row, this.whereCond));
+    }
+
+    // groupBy: aggregate messages by roomId
+    if (this.groupByCol && this.fromTable === mockTables.roomMessages) {
+      const groups = new Map<string, MockRow[]>();
+      for (const row of results) {
+        const key = row.roomId as string;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(row);
+      }
+
+      const aggregated: MockRow[] = [];
+      for (const [roomId, groupRows] of groups) {
+        const aggRow: MockRow = { roomId };
+
+        // Check selectFieldEntries for sql-based fields (count, max)
+        if (this.selectFieldEntries) {
+          for (const [alias, fieldDef] of this.selectFieldEntries) {
+            if (alias === "count") {
+              aggRow.count = groupRows.length;
+            } else if (alias === "lastActivityAt") {
+              const timestamps = groupRows.map((r) => new Date(r.createdAt as string).getTime());
+              aggRow.lastActivityAt = timestamps.length > 0 ? new Date(Math.max(...timestamps)) : null;
+            }
+          }
+        }
+
+        aggregated.push(aggRow);
+      }
+      return aggregated;
     }
 
     // Sort by createdAt descending
@@ -273,10 +326,22 @@ function createMockDb() {
       };
     },
 
-    select(fields?: Record<string, symbol>) {
+    select(fields?: Record<string, unknown>) {
       const chain = new QueryChain();
       if (fields) {
-        (chain as any).selectFields = fields;
+        // Separate symbol-based fields from sql-template fields
+        const symbolFields: Record<string, symbol> = {};
+        const sqlFields: Array<[string, unknown]> = [];
+        for (const [alias, val] of Object.entries(fields)) {
+          if (typeof val === "symbol") {
+            symbolFields[alias] = val;
+          } else {
+            // sql template or other non-symbol value
+            sqlFields.push([alias, val]);
+          }
+        }
+        (chain as any).selectFields = symbolFields;
+        (chain as any).selectFieldEntries = sqlFields;
       }
       return chain;
     },
@@ -545,6 +610,61 @@ describe("RoomRepository", () => {
       const result = await repo.listRooms("empty-company");
 
       expect(result).toHaveLength(0);
+    });
+
+    it("includes messageCount and lastActivityAt for rooms with messages", async () => {
+      db.addRoom(makeMockRoomRow({ id: "room-1", companyId: "company-1", name: "active-room" }));
+      db.addRoom(makeMockRoomRow({ id: "room-2", companyId: "company-1", name: "empty-room" }));
+
+      // Add messages to room-1
+      db.addMessage(
+        makeMockMessageRow({
+          id: "msg-1",
+          roomId: "room-1",
+          correlationId: "corr-1",
+          createdAt: new Date("2025-06-01T10:00:00Z"),
+        }),
+      );
+      db.addMessage(
+        makeMockMessageRow({
+          id: "msg-2",
+          roomId: "room-1",
+          correlationId: "corr-2",
+          createdAt: new Date("2025-06-01T12:00:00Z"),
+        }),
+      );
+      db.addMessage(
+        makeMockMessageRow({
+          id: "msg-3",
+          roomId: "room-1",
+          correlationId: "corr-3",
+          createdAt: new Date("2025-06-01T08:00:00Z"),
+        }),
+      );
+
+      const result = await repo.listRooms("company-1");
+
+      const activeRoom = result.find((r) => r.name === "active-room");
+      const emptyRoom = result.find((r) => r.name === "empty-room");
+
+      expect(activeRoom).toBeDefined();
+      expect(activeRoom!.messageCount).toBe(3);
+      expect(activeRoom!.lastActivityAt).toBeInstanceOf(Date);
+      expect(activeRoom!.lastActivityAt!.toISOString()).toBe("2025-06-01T12:00:00.000Z");
+
+      expect(emptyRoom).toBeDefined();
+      expect(emptyRoom!.messageCount).toBe(0);
+      expect(emptyRoom!.lastActivityAt).toBeNull();
+    });
+
+    it("defaults messageCount to 0 and lastActivityAt to null when room has no messages", async () => {
+      db.addRoom(makeMockRoomRow({ id: "room-1", companyId: "company-1", name: "silent-room" }));
+
+      const result = await repo.listRooms("company-1");
+
+      expect(result).toHaveLength(1);
+      expect(result[0].messageCount).toBe(0);
+      expect(result[0].lastActivityAt).toBeNull();
     });
   });
 

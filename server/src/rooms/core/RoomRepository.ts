@@ -138,7 +138,11 @@ function mapRowToRoomMessage(row: Record<string, unknown>): RoomMessage {
   };
 }
 
-function mapRowToRoomListItem(row: Record<string, unknown>): RoomListItem {
+function mapRowToRoomListItem(
+  row: Record<string, unknown>,
+  messageCount = 0,
+  lastActivityAt: Date | null = null,
+): RoomListItem {
   return {
     id: row.id as string,
     name: row.name as string,
@@ -149,6 +153,8 @@ function mapRowToRoomListItem(row: Record<string, unknown>): RoomListItem {
     spentUsd: row.spentUsd as string,
     monthlyBudgetUsd: row.monthlyBudgetUsd as string,
     updatedAt: row.updatedAt as Date,
+    messageCount,
+    lastActivityAt,
   };
 }
 
@@ -262,9 +268,42 @@ export class RoomRepository {
       .from(this.tables.rooms)
       .where(this.h.eq(this.tables.rooms.companyId, companyId));
 
-    return rows.map((row) =>
-      mapRowToRoomListItem(row as unknown as Record<string, unknown>),
-    );
+    if (rows.length === 0) return [];
+
+    const roomIds = rows.map((r) => (r as unknown as Record<string, unknown>).id as string);
+
+    // Count messages per room
+    const countRows = await this.db
+      .select({
+        roomId: this.tables.roomMessages.roomId,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(this.tables.roomMessages)
+      .where(sql`${this.tables.roomMessages.roomId} = ANY(${roomIds})`)
+      .groupBy(this.tables.roomMessages.roomId) as unknown as Array<{ roomId: string; count: number }>;
+
+    const countMap = new Map(countRows.map((r) => [r.roomId, r.count]));
+
+    // Get latest message timestamp per room
+    const activityRows = await this.db
+      .select({
+        roomId: this.tables.roomMessages.roomId,
+        lastActivityAt: sql<Date | null>`max(${this.tables.roomMessages.createdAt})`,
+      })
+      .from(this.tables.roomMessages)
+      .where(sql`${this.tables.roomMessages.roomId} = ANY(${roomIds})`)
+      .groupBy(this.tables.roomMessages.roomId) as unknown as Array<{ roomId: string; lastActivityAt: Date | null }>;
+
+    const activityMap = new Map(activityRows.map((r) => [r.roomId, r.lastActivityAt]));
+
+    return rows.map((row) => {
+      const id = (row as unknown as Record<string, unknown>).id as string;
+      return mapRowToRoomListItem(
+        row as unknown as Record<string, unknown>,
+        countMap.get(id) ?? 0,
+        activityMap.get(id) ?? null,
+      );
+    });
   }
 
   async updateState(roomId: string, newState: RoomState): Promise<Room> {
