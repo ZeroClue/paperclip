@@ -129,6 +129,9 @@ const mockHelpers: QueryHelpers = {
   lt(colRef: ColumnRef, val: unknown) {
     return { _type: "lt", col: colRef, val };
   },
+  gt(colRef: ColumnRef, val: unknown) {
+    return { _type: "gt", col: colRef, val };
+  },
   desc(colRef: ColumnRef) {
     return { _type: "desc", col: colRef };
   },

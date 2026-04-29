@@ -127,11 +127,12 @@ export function roomRoutes(
 
   // GET /rooms/:id/messages — chat history
   r.get("/rooms/:id/messages", async (req: Request, res: Response) => {
-    const { before, limit = "50" } = req.query;
+    const { before, after, limit = "50" } = req.query;
 
     const messages = await repository.getMessages(req.params.id, {
       limit: parseInt(limit as string, 10) || 50,
       before: typeof before === "string" ? before : undefined,
+      after: typeof after === "string" ? after : undefined,
     });
 
     return res.json(messages);
@@ -147,7 +148,7 @@ export function roomRoutes(
     }
 
     try {
-      await manager.transitionState(req.params.id, parsed.data.state);
+      await manager.transitionState(req.params.id, parsed.data.targetState);
       return res.json({ success: true });
     } catch (error: unknown) {
       if (error instanceof InvalidTransitionError) {

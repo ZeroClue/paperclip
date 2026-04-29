@@ -1,4 +1,4 @@
-import { eq, desc, and, lt, sql } from "drizzle-orm";
+import { eq, desc, and, lt, gt, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { rooms, roomMessages } from "@paperclipai/db";
 import {
@@ -38,7 +38,8 @@ export interface AddMessageInput {
 
 export interface GetMessagesOptions {
   limit?: number;
-  before?: string; // message ID for cursor pagination
+  before?: string; // message ID for cursor pagination (fetch older messages)
+  after?: string; // message ID for SSE reconnection (fetch newer messages)
 }
 
 export interface PaginatedMessages {
@@ -71,6 +72,7 @@ export interface QueryHelpers {
   eq(col: ColumnRef, val: unknown): Condition;
   and(...conds: Condition[]): Condition;
   lt(col: ColumnRef, val: unknown): Condition;
+  gt(col: ColumnRef, val: unknown): Condition;
   desc(col: ColumnRef): OrderExpr;
 }
 
@@ -88,7 +90,7 @@ const defaultTables: RoomTables = {
   roomMessages: roomMessages as unknown as RoomTables["roomMessages"],
 };
 
-const defaultHelpers: QueryHelpers = { eq, and, lt, desc };
+const defaultHelpers: QueryHelpers = { eq, and, lt, gt, desc };
 
 // ---------------------------------------------------------------------------
 // Row mapper helpers
@@ -390,6 +392,18 @@ export class RoomRepository {
 
       if (cursorRow) {
         conditions.push(this.h.lt(this.tables.roomMessages.createdAt, cursorRow.createdAt));
+      }
+    }
+    if (opts.after) {
+      // SSE reconnection: fetch messages created after the given message ID's timestamp
+      const cursorRow = await this.db
+        .select({ createdAt: this.tables.roomMessages.createdAt })
+        .from(this.tables.roomMessages)
+        .where(this.h.eq(this.tables.roomMessages.id, opts.after))
+        .then((rows) => rows[0] ?? null);
+
+      if (cursorRow) {
+        conditions.push(this.h.gt(this.tables.roomMessages.createdAt, cursorRow.createdAt));
       }
     }
 

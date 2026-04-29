@@ -490,6 +490,7 @@ describe("roomRoutes", () => {
       expect(repository.getMessages).toHaveBeenCalledWith("room-1", {
         limit: 50,
         before: undefined,
+        after: undefined,
       });
     });
 
@@ -512,6 +513,7 @@ describe("roomRoutes", () => {
       expect(repository.getMessages).toHaveBeenCalledWith("room-1", {
         limit: 10,
         before: "msg-50",
+        after: undefined,
       });
     });
 
@@ -534,6 +536,30 @@ describe("roomRoutes", () => {
       expect(repository.getMessages).toHaveBeenCalledWith("room-1", {
         limit: 50,
         before: undefined,
+        after: undefined,
+      });
+    });
+
+    it("passes after cursor for SSE reconnection", async () => {
+      const repository = {
+        getMessages: vi.fn().mockResolvedValue(MOCK_PAGINATED_MESSAGES),
+      };
+      const routes = roomRoutes(repository as any, {} as any, {} as any);
+
+      const req = createMockReq({
+        method: "GET",
+        url: "/rooms/room-1/messages",
+        params: { id: "room-1" },
+        query: { after: "msg-100", limit: "25" },
+      });
+      const res = createMockRes();
+
+      await routes(req, res, vi.fn());
+
+      expect(repository.getMessages).toHaveBeenCalledWith("room-1", {
+        limit: 25,
+        before: undefined,
+        after: "msg-100",
       });
     });
   });
@@ -549,7 +575,7 @@ describe("roomRoutes", () => {
         method: "PATCH",
         url: "/rooms/room-1/state",
         params: { id: "room-1" },
-        body: { state: RoomState.CONSENSUS },
+        body: { targetState: RoomState.CONSENSUS },
       });
       const res = createMockRes();
 
@@ -574,7 +600,7 @@ describe("roomRoutes", () => {
         method: "PATCH",
         url: "/rooms/room-1/state",
         params: { id: "room-1" },
-        body: { state: RoomState.SYNTHESISING },
+        body: { targetState: RoomState.SYNTHESISING },
       });
       const res = createMockRes();
 
@@ -593,7 +619,7 @@ describe("roomRoutes", () => {
         method: "PATCH",
         url: "/rooms/room-1/state",
         params: { id: "room-1" },
-        body: {}, // missing state
+        body: {}, // missing targetState
       });
       const res = createMockRes();
 
@@ -617,7 +643,7 @@ describe("roomRoutes", () => {
         method: "PATCH",
         url: "/rooms/nonexistent/state",
         params: { id: "nonexistent" },
-        body: { state: RoomState.CONSENSUS },
+        body: { targetState: RoomState.CONSENSUS },
       });
       const res = createMockRes();
 
@@ -639,7 +665,7 @@ describe("roomRoutes", () => {
         method: "PATCH",
         url: "/rooms/room-1/state",
         params: { id: "room-1" },
-        body: { state: RoomState.PAUSED, reason: "Budget exceeded" },
+        body: { targetState: RoomState.PAUSED, reason: "Budget exceeded" },
       });
       const res = createMockRes();
 

@@ -192,7 +192,7 @@ export const PostMessageSchema = z.object({
 export type PostMessageInput = z.infer<typeof PostMessageSchema>;
 
 export const PatchStateSchema = z.object({
-  state: z.nativeEnum(RoomState),
+  targetState: z.nativeEnum(RoomState),
   reason: z.string().optional(),
 });
 
