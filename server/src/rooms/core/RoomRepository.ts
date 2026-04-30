@@ -1,6 +1,6 @@
 import { eq, desc, and, lt, gt, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { rooms, roomMessages } from "@paperclipai/db";
+import { rooms, roomMessages, consensusDecisions, debateRounds } from "@paperclipai/db";
 import {
   RoomState,
   MessageType,
@@ -51,6 +51,60 @@ export interface PaginatedMessages {
 }
 
 // ---------------------------------------------------------------------------
+// Consensus decision & debate round types
+// ---------------------------------------------------------------------------
+
+export interface CreateConsensusDecisionInput {
+  roomId: string;
+  triggerMessageId: string;
+  correlationId: string;
+  plan: unknown;
+  debateRounds: number;
+  debateOutcome: string;
+  classification: string;
+  unresolved?: string[];
+}
+
+export interface ConsensusDecision {
+  id: string;
+  roomId: string;
+  triggerMessageId: string;
+  correlationId: string;
+  plan: unknown;
+  debateRounds: number;
+  debateOutcome: string;
+  unresolved: string[] | null;
+  classification: string;
+  createdAt: Date;
+}
+
+export interface CreateDebateRoundInput {
+  consensusDecisionId: string;
+  roundNumber: number;
+  leaderProposal: unknown;
+  leaderReasoning: string;
+  daDecision: string;
+  daChallengePoints: string[];
+  daConfidence: string;
+  leaderRevision: unknown;
+  leaderChanges: string[];
+}
+
+export interface DebateRound {
+  id: string;
+  consensusDecisionId: string;
+  roundNumber: number;
+  leaderProposal: unknown;
+  leaderReasoning: string;
+  daDecision: string;
+  daChallengePoints: string[];
+  daConfidence: string;
+  leaderRevision: unknown;
+  leaderChanges: string[];
+  createdAt: Date;
+}
+
+// ---------------------------------------------------------------------------
 // Table / query helper references (for dependency injection in tests)
 // ---------------------------------------------------------------------------
 
@@ -79,6 +133,8 @@ export interface QueryHelpers {
 export interface RoomTables {
   rooms: TableRef & { id: ColumnRef; companyId: ColumnRef; createdAt: ColumnRef; state: ColumnRef; spentUsd: ColumnRef };
   roomMessages: TableRef & { id: ColumnRef; roomId: ColumnRef; createdAt: ColumnRef };
+  consensusDecisions: TableRef & { id: ColumnRef; consensusDecisionId: ColumnRef };
+  debateRounds: TableRef & { id: ColumnRef; consensusDecisionId: ColumnRef; roundNumber: ColumnRef; createdAt: ColumnRef };
 }
 
 // ---------------------------------------------------------------------------
@@ -88,6 +144,8 @@ export interface RoomTables {
 const defaultTables: RoomTables = {
   rooms: rooms as unknown as RoomTables["rooms"],
   roomMessages: roomMessages as unknown as RoomTables["roomMessages"],
+  consensusDecisions: consensusDecisions as unknown as RoomTables["consensusDecisions"],
+  debateRounds: debateRounds as unknown as RoomTables["debateRounds"],
 };
 
 const defaultHelpers: QueryHelpers = { eq, and, lt, gt, desc };
@@ -157,6 +215,37 @@ function mapRowToRoomListItem(
     updatedAt: row.updatedAt as Date,
     messageCount,
     lastActivityAt,
+  };
+}
+
+function mapRowToConsensusDecision(row: Record<string, unknown>): ConsensusDecision {
+  return {
+    id: row.id as string,
+    roomId: row.roomId as string,
+    triggerMessageId: row.triggerMessageId as string,
+    correlationId: row.correlationId as string,
+    plan: row.plan,
+    debateRounds: row.debateRounds as number,
+    debateOutcome: row.debateOutcome as string,
+    unresolved: (row.unresolved as string[]) ?? null,
+    classification: row.classification as string,
+    createdAt: row.createdAt as Date,
+  };
+}
+
+function mapRowToDebateRound(row: Record<string, unknown>): DebateRound {
+  return {
+    id: row.id as string,
+    consensusDecisionId: row.consensusDecisionId as string,
+    roundNumber: row.roundNumber as number,
+    leaderProposal: row.leaderProposal,
+    leaderReasoning: row.leaderReasoning as string,
+    daDecision: row.daDecision as string,
+    daChallengePoints: (row.daChallengePoints as string[]) ?? [],
+    daConfidence: (row.daConfidence as string) ?? null,
+    leaderRevision: row.leaderRevision,
+    leaderChanges: (row.leaderChanges as string[]) ?? [],
+    createdAt: row.createdAt as Date,
   };
 }
 
@@ -461,6 +550,86 @@ export class RoomRepository {
     }
 
     return row.spentUsd as string;
+  }
+
+  // -------------------------------------------------------------------------
+  // Consensus decisions
+  // -------------------------------------------------------------------------
+
+  async createConsensusDecision(input: CreateConsensusDecisionInput): Promise<ConsensusDecision> {
+    const row = await this.db
+      .insert(this.tables.consensusDecisions)
+      .values({
+        roomId: input.roomId,
+        triggerMessageId: input.triggerMessageId,
+        correlationId: input.correlationId,
+        plan: input.plan,
+        debateRounds: input.debateRounds,
+        debateOutcome: input.debateOutcome,
+        unresolved: input.unresolved ?? null,
+        classification: input.classification,
+      } as any)
+      .returning()
+      .then((rows) => rows[0] ?? null);
+
+    if (!row) {
+      throw new Error("Failed to insert consensus decision");
+    }
+
+    return mapRowToConsensusDecision(row as unknown as Record<string, unknown>);
+  }
+
+  async getConsensusDecision(decisionId: string): Promise<ConsensusDecision> {
+    const row = await this.db
+      .select()
+      .from(this.tables.consensusDecisions)
+      .where(this.h.eq(this.tables.consensusDecisions.id, decisionId))
+      .then((rows) => rows[0] ?? null);
+
+    if (!row) {
+      throw new NotFoundError("ConsensusDecision", decisionId);
+    }
+
+    return mapRowToConsensusDecision(row as unknown as Record<string, unknown>);
+  }
+
+  // -------------------------------------------------------------------------
+  // Debate rounds
+  // -------------------------------------------------------------------------
+
+  async createDebateRound(input: CreateDebateRoundInput): Promise<DebateRound> {
+    const row = await this.db
+      .insert(this.tables.debateRounds)
+      .values({
+        consensusDecisionId: input.consensusDecisionId,
+        roundNumber: input.roundNumber,
+        leaderProposal: input.leaderProposal,
+        leaderReasoning: input.leaderReasoning,
+        daDecision: input.daDecision,
+        daChallengePoints: input.daChallengePoints,
+        daConfidence: input.daConfidence,
+        leaderRevision: input.leaderRevision,
+        leaderChanges: input.leaderChanges,
+      } as any)
+      .returning()
+      .then((rows) => rows[0] ?? null);
+
+    if (!row) {
+      throw new Error("Failed to insert debate round");
+    }
+
+    return mapRowToDebateRound(row as unknown as Record<string, unknown>);
+  }
+
+  async getDebateRounds(consensusDecisionId: string): Promise<DebateRound[]> {
+    const rows = await this.db
+      .select()
+      .from(this.tables.debateRounds)
+      .where(this.h.eq(this.tables.debateRounds.consensusDecisionId, consensusDecisionId))
+      .orderBy(this.h.desc(this.tables.debateRounds.roundNumber))
+      .then((rows) => rows as unknown[]);
+
+    return rows.map((row) => mapRowToDebateRound(row as Record<string, unknown>));
   }
 }
 

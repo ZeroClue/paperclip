@@ -42,6 +42,16 @@ const col = {
     roomId: Symbol("roomMessages.roomId"),
     createdAt: Symbol("roomMessages.createdAt"),
   },
+  consensusDecisions: {
+    id: Symbol("consensusDecisions.id"),
+    consensusDecisionId: Symbol("consensusDecisions.consensusDecisionId"),
+  },
+  debateRounds: {
+    id: Symbol("debateRounds.id"),
+    consensusDecisionId: Symbol("debateRounds.consensusDecisionId"),
+    roundNumber: Symbol("debateRounds.roundNumber"),
+    createdAt: Symbol("debateRounds.createdAt"),
+  },
 };
 
 const mockTables: RoomTables = {
@@ -57,6 +67,16 @@ const mockTables: RoomTables = {
     roomId: col.roomMessages.roomId as unknown as ColumnRef,
     createdAt: col.roomMessages.createdAt as unknown as ColumnRef,
   } as unknown as RoomTables["roomMessages"],
+  consensusDecisions: {
+    id: col.consensusDecisions.id as unknown as ColumnRef,
+    consensusDecisionId: col.consensusDecisions.consensusDecisionId as unknown as ColumnRef,
+  } as unknown as RoomTables["consensusDecisions"],
+  debateRounds: {
+    id: col.debateRounds.id as unknown as ColumnRef,
+    consensusDecisionId: col.debateRounds.consensusDecisionId as unknown as ColumnRef,
+    roundNumber: col.debateRounds.roundNumber as unknown as ColumnRef,
+    createdAt: col.debateRounds.createdAt as unknown as ColumnRef,
+  } as unknown as RoomTables["debateRounds"],
 };
 
 // ---------------------------------------------------------------------------
@@ -204,7 +224,19 @@ class QueryChain implements PromiseLike<MockRow[]> {
     if (!this.fromTable) return [];
 
     const isMessageTable = this.fromTable === mockTables.roomMessages;
-    const store = isMessageTable ? getStore("messages") : getStore("rooms");
+    const isConsensusTable = this.fromTable === mockTables.consensusDecisions;
+    const isDebateRoundTable = this.fromTable === mockTables.debateRounds;
+
+    let store: Map<string, MockRow>;
+    if (isMessageTable) {
+      store = getStore("messages");
+    } else if (isConsensusTable) {
+      store = getStore("consensusDecisions");
+    } else if (isDebateRoundTable) {
+      store = getStore("debateRounds");
+    } else {
+      store = getStore("rooms");
+    }
     let results = Array.from(store.values());
 
     // Apply where filter
@@ -242,8 +274,13 @@ class QueryChain implements PromiseLike<MockRow[]> {
       return aggregated;
     }
 
-    // Sort by createdAt descending
+    // Sort by createdAt descending (or roundNumber for debate rounds)
     results.sort((a, b) => {
+      if (isDebateRoundTable && this.orderCol) {
+        const aNum = a.roundNumber as number;
+        const bNum = b.roundNumber as number;
+        return this.orderDir === "desc" ? bNum - aNum : aNum - bNum;
+      }
       const aTime = new Date(a.createdAt as string).getTime();
       const bTime = new Date(b.createdAt as string).getTime();
       return this.orderDir === "desc" ? bTime - aTime : aTime - bTime;
@@ -276,9 +313,11 @@ class QueryChain implements PromiseLike<MockRow[]> {
 const stores = {
   rooms: new Map<string, MockRow>(),
   messages: new Map<string, MockRow>(),
+  consensusDecisions: new Map<string, MockRow>(),
+  debateRounds: new Map<string, MockRow>(),
 };
 
-function getStore(type: "rooms" | "messages"): Map<string, MockRow> {
+function getStore(type: "rooms" | "messages" | "consensusDecisions" | "debateRounds"): Map<string, MockRow> {
   return stores[type];
 }
 
@@ -289,17 +328,27 @@ function getStore(type: "rooms" | "messages"): Map<string, MockRow> {
 function createMockDb() {
   let nextRoomId = 1;
   let nextMessageId = 1;
+  let nextConsensusDecisionId = 1;
+  let nextDebateRoundId = 1;
 
   function makeRoomId() { return `room-${nextRoomId++}`; }
   function makeMessageId() { return `msg-${nextMessageId++}`; }
+  function makeConsensusDecisionId() { return `cd-${nextConsensusDecisionId++}`; }
+  function makeDebateRoundId() { return `dr-${nextDebateRoundId++}`; }
 
   function addRoom(row: MockRow) { stores.rooms.set(row.id as string, row); }
   function addMessage(row: MockRow) { stores.messages.set(row.id as string, row); }
+  function addConsensusDecision(row: MockRow) { stores.consensusDecisions.set(row.id as string, row); }
+  function addDebateRound(row: MockRow) { stores.debateRounds.set(row.id as string, row); }
   function clearStores() {
     stores.rooms.clear();
     stores.messages.clear();
+    stores.consensusDecisions.clear();
+    stores.debateRounds.clear();
     nextRoomId = 1;
     nextMessageId = 1;
+    nextConsensusDecisionId = 1;
+    nextDebateRoundId = 1;
   }
 
   const mockDb: any = {
@@ -309,19 +358,30 @@ function createMockDb() {
           return {
             async returning() {
               const now = new Date();
-              const isMessage = "roomId" in data && "correlationId" in data;
-              const id = isMessage ? makeMessageId() : makeRoomId();
+              let id: string;
+              let targetStore: Map<string, MockRow>;
+
+              if (table === mockTables.debateRounds) {
+                id = makeDebateRoundId();
+                targetStore = stores.debateRounds;
+              } else if (table === mockTables.consensusDecisions) {
+                id = makeConsensusDecisionId();
+                targetStore = stores.consensusDecisions;
+              } else if ("roomId" in data && "correlationId" in data && !("plan" in data)) {
+                id = makeMessageId();
+                targetStore = stores.messages;
+              } else {
+                id = makeRoomId();
+                targetStore = stores.rooms;
+              }
+
               const row: MockRow = {
                 ...data,
                 id,
                 createdAt: data.createdAt ?? now,
                 updatedAt: data.updatedAt ?? now,
               };
-              if (isMessage) {
-                stores.messages.set(id, row);
-              } else {
-                stores.rooms.set(id, row);
-              }
+              targetStore.set(id, row);
               return [row];
             },
           };
@@ -389,7 +449,7 @@ function createMockDb() {
     },
   };
 
-  return { mockDb, addRoom, addMessage, clearStores, makeRoomId, makeMessageId };
+  return { mockDb, addRoom, addMessage, addConsensusDecision, addDebateRound, clearStores, makeRoomId, makeMessageId, makeConsensusDecisionId, makeDebateRoundId };
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +532,8 @@ describe("RoomRepository", () => {
     // Clear shared stores from any previous test
     stores.rooms.clear();
     stores.messages.clear();
+    stores.consensusDecisions.clear();
+    stores.debateRounds.clear();
     db = createMockDb();
     repo = createRepo(db);
   });
@@ -976,6 +1038,169 @@ describe("RoomRepository", () => {
       await expect(repo.getRoomSpend("nonexistent")).rejects.toThrow(
         NotFoundError,
       );
+    });
+  });
+
+  // =========================================================================
+  // createConsensusDecision
+  // =========================================================================
+
+  describe("createConsensusDecision", () => {
+    it("creates a consensus decision and returns it", async () => {
+      const decision = await repo.createConsensusDecision({
+        roomId: "room-1",
+        triggerMessageId: "msg-1",
+        correlationId: "corr-1",
+        plan: { tasks: ["do something"] },
+        debateRounds: 2,
+        debateOutcome: "consensus",
+        classification: "complex",
+        unresolved: ["open item"],
+      });
+
+      expect(decision).toBeDefined();
+      expect(decision.id).toBeDefined();
+      expect(decision.roomId).toBe("room-1");
+      expect(decision.triggerMessageId).toBe("msg-1");
+      expect(decision.correlationId).toBe("corr-1");
+      expect(decision.plan).toEqual({ tasks: ["do something"] });
+      expect(decision.debateRounds).toBe(2);
+      expect(decision.debateOutcome).toBe("consensus");
+      expect(decision.classification).toBe("complex");
+      expect(decision.unresolved).toEqual(["open item"]);
+      expect(decision.createdAt).toBeInstanceOf(Date);
+    });
+
+    it("defaults unresolved to null when not provided", async () => {
+      const decision = await repo.createConsensusDecision({
+        roomId: "room-1",
+        triggerMessageId: "msg-1",
+        correlationId: "corr-2",
+        plan: { tasks: [] },
+        debateRounds: 1,
+        debateOutcome: "consensus",
+        classification: "simple",
+      });
+
+      expect(decision.unresolved).toBeNull();
+    });
+  });
+
+  // =========================================================================
+  // getConsensusDecision
+  // =========================================================================
+
+  describe("getConsensusDecision", () => {
+    it("returns a consensus decision by id", async () => {
+      db.addConsensusDecision({
+        id: "cd-1",
+        roomId: "room-1",
+        triggerMessageId: "msg-1",
+        correlationId: "corr-1",
+        plan: { tasks: ["task 1"] },
+        debateRounds: 3,
+        debateOutcome: "leader-decides",
+        unresolved: null,
+        classification: "complex",
+        createdAt: new Date("2025-01-01T00:00:00Z"),
+      });
+
+      const decision = await repo.getConsensusDecision("cd-1");
+
+      expect(decision.id).toBe("cd-1");
+      expect(decision.debateOutcome).toBe("leader-decides");
+      expect(decision.debateRounds).toBe(3);
+      expect(decision.plan).toEqual({ tasks: ["task 1"] });
+    });
+
+    it("throws NotFoundError for missing decision", async () => {
+      await expect(repo.getConsensusDecision("nonexistent")).rejects.toThrow(
+        NotFoundError,
+      );
+      await expect(repo.getConsensusDecision("nonexistent")).rejects.toThrow(
+        "ConsensusDecision with id nonexistent not found",
+      );
+    });
+  });
+
+  // =========================================================================
+  // createDebateRound
+  // =========================================================================
+
+  describe("createDebateRound", () => {
+    it("creates a debate round and returns it", async () => {
+      const round = await repo.createDebateRound({
+        consensusDecisionId: "cd-1",
+        roundNumber: 1,
+        leaderProposal: { tasks: ["refactor auth"] },
+        leaderReasoning: "Auth module needs restructuring",
+        daDecision: "challenge",
+        daChallengePoints: ["no test coverage mentioned"],
+        daConfidence: "0.7",
+        leaderRevision: { tasks: ["refactor auth", "add auth tests"] },
+        leaderChanges: ["added auth test plan"],
+      });
+
+      expect(round).toBeDefined();
+      expect(round.id).toBeDefined();
+      expect(round.consensusDecisionId).toBe("cd-1");
+      expect(round.roundNumber).toBe(1);
+      expect(round.leaderProposal).toEqual({ tasks: ["refactor auth"] });
+      expect(round.leaderReasoning).toBe("Auth module needs restructuring");
+      expect(round.daDecision).toBe("challenge");
+      expect(round.daChallengePoints).toEqual(["no test coverage mentioned"]);
+      expect(round.daConfidence).toBe("0.7");
+      expect(round.leaderRevision).toEqual({ tasks: ["refactor auth", "add auth tests"] });
+      expect(round.leaderChanges).toEqual(["added auth test plan"]);
+      expect(round.createdAt).toBeInstanceOf(Date);
+    });
+  });
+
+  // =========================================================================
+  // getDebateRounds
+  // =========================================================================
+
+  describe("getDebateRounds", () => {
+    it("returns debate rounds for a consensus decision", async () => {
+      db.addDebateRound({
+        id: "dr-1",
+        consensusDecisionId: "cd-1",
+        roundNumber: 1,
+        leaderProposal: { plan: "v1" },
+        leaderReasoning: "initial plan",
+        daDecision: "challenge",
+        daChallengePoints: ["issue 1"],
+        daConfidence: "0.8",
+        leaderRevision: null,
+        leaderChanges: [],
+        createdAt: new Date("2025-01-01T00:00:00Z"),
+      });
+      db.addDebateRound({
+        id: "dr-2",
+        consensusDecisionId: "cd-1",
+        roundNumber: 2,
+        leaderProposal: { plan: "v2" },
+        leaderReasoning: "revised plan",
+        daDecision: "agree",
+        daChallengePoints: [],
+        daConfidence: "0.95",
+        leaderRevision: null,
+        leaderChanges: [],
+        createdAt: new Date("2025-01-01T00:01:00Z"),
+      });
+
+      const rounds = await repo.getDebateRounds("cd-1");
+
+      expect(rounds).toHaveLength(2);
+      // Ordered by roundNumber desc (2, 1)
+      expect(rounds[0].roundNumber).toBe(2);
+      expect(rounds[1].roundNumber).toBe(1);
+    });
+
+    it("returns empty array when no rounds exist for the decision", async () => {
+      const rounds = await repo.getDebateRounds("cd-nonexistent");
+
+      expect(rounds).toHaveLength(0);
     });
   });
 });
