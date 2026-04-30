@@ -52,6 +52,13 @@ const col = {
     roundNumber: Symbol("debateRounds.roundNumber"),
     createdAt: Symbol("debateRounds.createdAt"),
   },
+  workerSessions: {
+    id: Symbol("workerSessions.id"),
+    consensusDecisionId: Symbol("workerSessions.consensusDecisionId"),
+    issueId: Symbol("workerSessions.issueId"),
+    status: Symbol("workerSessions.status"),
+    roomId: Symbol("workerSessions.roomId"),
+  },
 };
 
 const mockTables: RoomTables = {
@@ -77,6 +84,13 @@ const mockTables: RoomTables = {
     roundNumber: col.debateRounds.roundNumber as unknown as ColumnRef,
     createdAt: col.debateRounds.createdAt as unknown as ColumnRef,
   } as unknown as RoomTables["debateRounds"],
+  workerSessions: {
+    id: col.workerSessions.id as unknown as ColumnRef,
+    consensusDecisionId: col.workerSessions.consensusDecisionId as unknown as ColumnRef,
+    issueId: col.workerSessions.issueId as unknown as ColumnRef,
+    status: col.workerSessions.status as unknown as ColumnRef,
+    roomId: col.workerSessions.roomId as unknown as ColumnRef,
+  } as unknown as RoomTables["workerSessions"],
 };
 
 // ---------------------------------------------------------------------------
@@ -226,6 +240,7 @@ class QueryChain implements PromiseLike<MockRow[]> {
     const isMessageTable = this.fromTable === mockTables.roomMessages;
     const isConsensusTable = this.fromTable === mockTables.consensusDecisions;
     const isDebateRoundTable = this.fromTable === mockTables.debateRounds;
+    const isWorkerSessionTable = this.fromTable === mockTables.workerSessions;
 
     let store: Map<string, MockRow>;
     if (isMessageTable) {
@@ -234,6 +249,8 @@ class QueryChain implements PromiseLike<MockRow[]> {
       store = getStore("consensusDecisions");
     } else if (isDebateRoundTable) {
       store = getStore("debateRounds");
+    } else if (isWorkerSessionTable) {
+      store = getStore("workerSessions");
     } else {
       store = getStore("rooms");
     }
@@ -315,9 +332,10 @@ const stores = {
   messages: new Map<string, MockRow>(),
   consensusDecisions: new Map<string, MockRow>(),
   debateRounds: new Map<string, MockRow>(),
+  workerSessions: new Map<string, MockRow>(),
 };
 
-function getStore(type: "rooms" | "messages" | "consensusDecisions" | "debateRounds"): Map<string, MockRow> {
+function getStore(type: "rooms" | "messages" | "consensusDecisions" | "debateRounds" | "workerSessions"): Map<string, MockRow> {
   return stores[type];
 }
 
@@ -330,25 +348,30 @@ function createMockDb() {
   let nextMessageId = 1;
   let nextConsensusDecisionId = 1;
   let nextDebateRoundId = 1;
+  let nextWorkerSessionId = 1;
 
   function makeRoomId() { return `room-${nextRoomId++}`; }
   function makeMessageId() { return `msg-${nextMessageId++}`; }
   function makeConsensusDecisionId() { return `cd-${nextConsensusDecisionId++}`; }
   function makeDebateRoundId() { return `dr-${nextDebateRoundId++}`; }
+  function makeWorkerSessionId() { return `ws-${nextWorkerSessionId++}`; }
 
   function addRoom(row: MockRow) { stores.rooms.set(row.id as string, row); }
   function addMessage(row: MockRow) { stores.messages.set(row.id as string, row); }
   function addConsensusDecision(row: MockRow) { stores.consensusDecisions.set(row.id as string, row); }
   function addDebateRound(row: MockRow) { stores.debateRounds.set(row.id as string, row); }
+  function addWorkerSession(row: MockRow) { stores.workerSessions.set(row.id as string, row); }
   function clearStores() {
     stores.rooms.clear();
     stores.messages.clear();
     stores.consensusDecisions.clear();
     stores.debateRounds.clear();
+    stores.workerSessions.clear();
     nextRoomId = 1;
     nextMessageId = 1;
     nextConsensusDecisionId = 1;
     nextDebateRoundId = 1;
+    nextWorkerSessionId = 1;
   }
 
   const mockDb: any = {
@@ -361,7 +384,10 @@ function createMockDb() {
               let id: string;
               let targetStore: Map<string, MockRow>;
 
-              if (table === mockTables.debateRounds) {
+              if (table === mockTables.workerSessions) {
+                id = makeWorkerSessionId();
+                targetStore = stores.workerSessions;
+              } else if (table === mockTables.debateRounds) {
                 id = makeDebateRoundId();
                 targetStore = stores.debateRounds;
               } else if (table === mockTables.consensusDecisions) {
@@ -417,7 +443,15 @@ function createMockDb() {
               return {
                 async returning() {
                   const isMessageTable = table === mockTables.roomMessages;
-                  const store = isMessageTable ? stores.messages : stores.rooms;
+                  const isWorkerSessionTable = table === mockTables.workerSessions;
+                  let store: Map<string, MockRow>;
+                  if (isMessageTable) {
+                    store = stores.messages;
+                  } else if (isWorkerSessionTable) {
+                    store = stores.workerSessions;
+                  } else {
+                    store = stores.rooms;
+                  }
                   const results = Array.from(store.values());
 
                   const matched = results.filter((row) => matchCondition(row, cond));
@@ -449,7 +483,7 @@ function createMockDb() {
     },
   };
 
-  return { mockDb, addRoom, addMessage, addConsensusDecision, addDebateRound, clearStores, makeRoomId, makeMessageId, makeConsensusDecisionId, makeDebateRoundId };
+  return { mockDb, addRoom, addMessage, addConsensusDecision, addDebateRound, addWorkerSession, clearStores, makeRoomId, makeMessageId, makeConsensusDecisionId, makeDebateRoundId, makeWorkerSessionId };
 }
 
 // ---------------------------------------------------------------------------
@@ -534,6 +568,7 @@ describe("RoomRepository", () => {
     stores.messages.clear();
     stores.consensusDecisions.clear();
     stores.debateRounds.clear();
+    stores.workerSessions.clear();
     db = createMockDb();
     repo = createRepo(db);
   });
@@ -1201,6 +1236,177 @@ describe("RoomRepository", () => {
       const rounds = await repo.getDebateRounds("cd-nonexistent");
 
       expect(rounds).toHaveLength(0);
+    });
+  });
+
+  // =========================================================================
+  // Worker Session persistence
+  // =========================================================================
+
+  describe("WorkerSession persistence", () => {
+    let workerSessionId: string;
+    let consensusDecisionId = "cd-worker-test";
+
+    beforeEach(() => {
+      // Create a consensus decision for testing
+      db.addConsensusDecision({
+        id: consensusDecisionId,
+        roomId: "room-1",
+        triggerMessageId: "msg-1",
+        correlationId: "corr-worker-test",
+        plan: { tasks: ["test task"] },
+        debateRounds: 0,
+        debateOutcome: "unanimous",
+        classification: "simple",
+        createdAt: new Date("2025-01-01T00:00:00Z"),
+      });
+    });
+
+    it("creates a worker session", async () => {
+      const session = await repo.createWorkerSession({
+        roomId: "room-1",
+        consensusDecisionId: consensusDecisionId,
+        issueId: "00000000-0000-0000-0000-000000000999",
+        taskDefinition: {
+          id: "00000000-0000-0000-0000-000000000888",
+          description: "Test task",
+          roomId: "room-1",
+          dependencies: [],
+          workerConfig: { extensions: [], skills: [] },
+          isIdempotent: true,
+          correlationId: "worker-corr-001",
+        },
+        status: "pending" as any,
+      });
+      expect(session.id).toBeDefined();
+      expect(session.status).toBe("pending");
+      workerSessionId = session.id;
+    });
+
+    it("gets a worker session by issue id", async () => {
+      db.addWorkerSession({
+        id: "ws-1",
+        roomId: "room-1",
+        consensusDecisionId: consensusDecisionId,
+        issueId: "00000000-0000-0000-0000-000000000999",
+        taskDefinition: {
+          id: "00000000-0000-0000-0000-000000000888",
+          description: "Test task",
+          roomId: "room-1",
+          dependencies: [],
+          workerConfig: { extensions: [], skills: [] },
+          isIdempotent: true,
+          correlationId: "worker-corr-001",
+        },
+        status: "pending",
+        piSessionId: null,
+        piSessionFilePath: null,
+        output: null,
+        costUsd: "0.0000",
+        errorDetails: null,
+        startedAt: null,
+        completedAt: null,
+        createdAt: new Date("2025-01-01T00:00:00Z"),
+      });
+
+      const session = await repo.getWorkerSessionByIssue("00000000-0000-0000-0000-000000000999");
+      expect(session).toBeDefined();
+      expect(session?.issueId).toBe("00000000-0000-0000-0000-000000000999");
+    });
+
+    it("returns null for missing worker session", async () => {
+      const session = await repo.getWorkerSessionByIssue("00000000-0000-0000-0000-000000000000");
+      expect(session).toBeNull();
+    });
+
+    it("updates worker session status and output", async () => {
+      db.addWorkerSession({
+        id: "ws-2",
+        roomId: "room-1",
+        consensusDecisionId: consensusDecisionId,
+        issueId: "00000000-0000-0000-0000-000000000998",
+        taskDefinition: {
+          id: "00000000-0000-0000-0000-000000000887",
+          description: "Test task",
+          roomId: "room-1",
+          dependencies: [],
+          workerConfig: { extensions: [], skills: [] },
+          isIdempotent: true,
+          correlationId: "worker-corr-002",
+        },
+        status: "pending",
+        piSessionId: null,
+        piSessionFilePath: null,
+        output: null,
+        costUsd: "0.0000",
+        errorDetails: null,
+        startedAt: null,
+        completedAt: null,
+        createdAt: new Date("2025-01-01T00:00:00Z"),
+      });
+
+      const updated = await repo.updateWorkerSession("ws-2", {
+        status: "completed" as any,
+        output: "Task completed successfully",
+        completedAt: new Date(),
+      });
+      expect(updated.status).toBe("completed");
+      expect(updated.output).toBe("Task completed successfully");
+    });
+
+    it("gets all worker sessions for a consensus decision", async () => {
+      db.addWorkerSession({
+        id: "ws-3",
+        roomId: "room-1",
+        consensusDecisionId: consensusDecisionId,
+        issueId: "00000000-0000-0000-0000-000000000997",
+        taskDefinition: {
+          id: "00000000-0000-0000-0000-000000000886",
+          description: "First task",
+          roomId: "room-1",
+          dependencies: [],
+          workerConfig: { extensions: [], skills: [] },
+          isIdempotent: true,
+          correlationId: "worker-corr-003",
+        },
+        status: "pending",
+        piSessionId: null,
+        piSessionFilePath: null,
+        output: null,
+        costUsd: "0.0000",
+        errorDetails: null,
+        startedAt: null,
+        completedAt: null,
+        createdAt: new Date("2025-01-01T00:00:00Z"),
+      });
+
+      db.addWorkerSession({
+        id: "ws-4",
+        roomId: "room-1",
+        consensusDecisionId: consensusDecisionId,
+        issueId: "00000000-0000-0000-0000-000000000996",
+        taskDefinition: {
+          id: "00000000-0000-0000-0000-000000000885",
+          description: "Second task",
+          roomId: "room-1",
+          dependencies: [],
+          workerConfig: { extensions: [], skills: [] },
+          isIdempotent: true,
+          correlationId: "worker-corr-004",
+        },
+        status: "pending",
+        piSessionId: null,
+        piSessionFilePath: null,
+        output: null,
+        costUsd: "0.0000",
+        errorDetails: null,
+        startedAt: null,
+        completedAt: null,
+        createdAt: new Date("2025-01-01T00:01:00Z"),
+      });
+
+      const sessions = await repo.getWorkerSessions(consensusDecisionId);
+      expect(sessions).toHaveLength(2);
     });
   });
 });

@@ -1,6 +1,6 @@
 import { eq, desc, and, lt, gt, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { rooms, roomMessages, consensusDecisions, debateRounds } from "@paperclipai/db";
+import { rooms, roomMessages, consensusDecisions, debateRounds, workerSessions } from "@paperclipai/db";
 import {
   RoomState,
   MessageType,
@@ -11,6 +11,7 @@ import {
   NotFoundError,
   DuplicateError,
   InvalidTransitionError,
+  WorkerSessionStatus,
 } from "./types.js";
 import type {
   Room,
@@ -18,6 +19,8 @@ import type {
   RoomConfig,
   RoomListItem,
   CreateRoomInput,
+  TaskDefinition,
+  WorkerSession,
 } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -104,6 +107,25 @@ export interface DebateRound {
   createdAt: Date;
 }
 
+export interface CreateWorkerSessionInput {
+  roomId: string;
+  consensusDecisionId: string;
+  issueId: string;
+  taskDefinition: TaskDefinition;
+  status: WorkerSessionStatus;
+}
+
+export interface UpdateWorkerSessionInput {
+  status?: WorkerSessionStatus;
+  piSessionId?: string;
+  piSessionFilePath?: string;
+  output?: string;
+  costUsd?: number;
+  errorDetails?: Record<string, unknown> | null;
+  startedAt?: Date;
+  completedAt?: Date;
+}
+
 // ---------------------------------------------------------------------------
 // Table / query helper references (for dependency injection in tests)
 // ---------------------------------------------------------------------------
@@ -135,6 +157,7 @@ export interface RoomTables {
   roomMessages: TableRef & { id: ColumnRef; roomId: ColumnRef; createdAt: ColumnRef };
   consensusDecisions: TableRef & { id: ColumnRef; consensusDecisionId: ColumnRef };
   debateRounds: TableRef & { id: ColumnRef; consensusDecisionId: ColumnRef; roundNumber: ColumnRef; createdAt: ColumnRef };
+  workerSessions: TableRef & { id: ColumnRef; consensusDecisionId: ColumnRef; issueId: ColumnRef; status: ColumnRef; roomId: ColumnRef };
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +169,7 @@ const defaultTables: RoomTables = {
   roomMessages: roomMessages as unknown as RoomTables["roomMessages"],
   consensusDecisions: consensusDecisions as unknown as RoomTables["consensusDecisions"],
   debateRounds: debateRounds as unknown as RoomTables["debateRounds"],
+  workerSessions: workerSessions as unknown as RoomTables["workerSessions"],
 };
 
 const defaultHelpers: QueryHelpers = { eq, and, lt, gt, desc };
@@ -245,6 +269,25 @@ function mapRowToDebateRound(row: Record<string, unknown>): DebateRound {
     daConfidence: (row.daConfidence as string) ?? null,
     leaderRevision: row.leaderRevision,
     leaderChanges: (row.leaderChanges as string[]) ?? [],
+    createdAt: row.createdAt as Date,
+  };
+}
+
+function mapRowToWorkerSession(row: Record<string, unknown>): WorkerSession {
+  return {
+    id: row.id as string,
+    roomId: row.roomId as string,
+    consensusDecisionId: row.consensusDecisionId as string,
+    issueId: row.issueId as string,
+    taskDefinition: row.taskDefinition as TaskDefinition,
+    status: row.status as WorkerSessionStatus,
+    piSessionId: (row.piSessionId as string) ?? null,
+    piSessionFilePath: (row.piSessionFilePath as string) ?? null,
+    output: (row.output as string) ?? null,
+    costUsd: parseFloat(row.costUsd as string),
+    errorDetails: (row.errorDetails as Record<string, unknown>) ?? null,
+    startedAt: (row.startedAt as Date) ?? null,
+    completedAt: (row.completedAt as Date) ?? null,
     createdAt: row.createdAt as Date,
   };
 }
@@ -630,6 +673,74 @@ export class RoomRepository {
       .then((rows) => rows as unknown[]);
 
     return rows.map((row) => mapRowToDebateRound(row as Record<string, unknown>));
+  }
+
+  // -------------------------------------------------------------------------
+  // Worker Sessions
+  // -------------------------------------------------------------------------
+
+  async createWorkerSession(input: CreateWorkerSessionInput): Promise<WorkerSession> {
+    const row = await this.db
+      .insert(this.tables.workerSessions)
+      .values({
+        roomId: input.roomId,
+        consensusDecisionId: input.consensusDecisionId,
+        issueId: input.issueId,
+        taskDefinition: input.taskDefinition as Record<string, unknown>,
+        status: input.status,
+        piSessionId: null,
+        piSessionFilePath: null,
+        output: null,
+        costUsd: '0.0000',
+        errorDetails: null,
+        startedAt: null,
+        completedAt: null,
+      } as any)
+      .returning()
+      .then((rows) => rows[0] ?? null);
+
+    if (!row) {
+      throw new Error("Failed to insert worker session");
+    }
+
+    return mapRowToWorkerSession(row as unknown as Record<string, unknown>);
+  }
+
+  async getWorkerSessionByIssue(issueId: string): Promise<WorkerSession | null> {
+    const row = await this.db
+      .select()
+      .from(this.tables.workerSessions)
+      .where(this.h.eq(this.tables.workerSessions.issueId, issueId))
+      .then((rows) => rows[0] ?? null);
+
+    if (!row) return null;
+    return mapRowToWorkerSession(row as unknown as Record<string, unknown>);
+  }
+
+  async updateWorkerSession(sessionId: string, updates: UpdateWorkerSessionInput): Promise<WorkerSession> {
+    const row = await this.db
+      .update(this.tables.workerSessions)
+      .set(updates as any)
+      .where(this.h.eq(this.tables.workerSessions.id, sessionId))
+      .returning()
+      .then((rows) => rows[0] ?? null);
+
+    if (!row) {
+      throw new NotFoundError("WorkerSession", sessionId);
+    }
+
+    return mapRowToWorkerSession(row as unknown as Record<string, unknown>);
+  }
+
+  async getWorkerSessions(consensusDecisionId: string): Promise<WorkerSession[]> {
+    const rows = await this.db
+      .select()
+      .from(this.tables.workerSessions)
+      .where(this.h.eq(this.tables.workerSessions.consensusDecisionId, consensusDecisionId));
+
+    return rows.map((row) =>
+      mapRowToWorkerSession(row as unknown as Record<string, unknown>),
+    );
   }
 }
 
