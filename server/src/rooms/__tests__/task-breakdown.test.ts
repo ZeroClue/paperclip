@@ -183,4 +183,42 @@ describe('TaskBreakdownService', () => {
       depId === createdIssues[1].id && issueId === createdIssues[2].id
     )).toBe(true);
   });
+
+  it('throws error when circular dependencies are detected', async () => {
+    const tasks: TaskDefinition[] = [
+      {
+        id: 'task-1',
+        description: 'Task 1 (depends on task-2)',
+        roomId: ROOM_ID,
+        dependencies: ['task-2'],
+        workerConfig: { extensions: [], skills: [] },
+        isIdempotent: true,
+        correlationId: 'corr-1',
+      },
+      {
+        id: 'task-2',
+        description: 'Task 2 (depends on task-1)',
+        roomId: ROOM_ID,
+        dependencies: ['task-1'],
+        workerConfig: { extensions: [], skills: [] },
+        isIdempotent: true,
+        correlationId: 'corr-2',
+      },
+    ];
+
+    const mockIssueService = {
+      createIssue: vi.fn(),
+      addBlocker: vi.fn(),
+    };
+
+    const mockRepo = {
+      createWorkerSession: vi.fn(),
+    } as unknown as RoomRepository;
+
+    const service = new TaskBreakdownService(mockIssueService as any, mockRepo);
+
+    await expect(
+      service.createTasksFromPlan(makeRoom(), makeConsensusDecision(), tasks)
+    ).rejects.toThrow('Circular dependency detected');
+  });
 });
