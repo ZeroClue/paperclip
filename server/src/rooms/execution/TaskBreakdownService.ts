@@ -27,6 +27,10 @@ export class TaskBreakdownService {
     consensusDecision: ConsensusDecision,
     tasks: TaskDefinition[],
   ): Promise<WorkerSession[]> {
+    // NOTE: Transaction/rollback limitation
+    // This method lacks transactional semantics. If issue creation succeeds but addBlocker fails,
+    // orphaned issues may exist. If createWorkerSession fails, issues exist but no sessions track them.
+    // Idempotency relies on correlation_id to detect and skip duplicate operations.
     const issueIds = new Map<string, string>(); // taskId → issueId
 
     // Topological sort by dependencies
@@ -40,6 +44,7 @@ export class TaskBreakdownService {
         companyId: room.companyId,
         goalId: room.linkedGoalId ?? undefined,
         projectId: room.linkedProjectId ?? undefined,
+        // Database column limit: truncate to 200 characters (silent truncation prevents DB errors)
         title: task.description.slice(0, 200),
         description: task.description,
         assigneeAgentId: room.config.workers.agentTemplate.model,
@@ -59,6 +64,8 @@ export class TaskBreakdownService {
         const depIssueId = issueIds.get(depId);
         if (depIssueId) {
           await this.issueService.addBlocker(depIssueId, issue.id);
+        } else {
+          throw new Error(`Dependency issue ID not found for task '${depId}'`);
         }
       }
 
@@ -91,7 +98,9 @@ export class TaskBreakdownService {
       visiting.add(taskId);
 
       const task = tasks.find((t) => t.id === taskId);
-      if (!task) return;
+      if (!task) {
+        throw new Error(`Task '${taskId}' not found in plan. Dependencies must reference valid task IDs.`);
+      }
 
       for (const depId of task.dependencies) {
         visit(depId);
