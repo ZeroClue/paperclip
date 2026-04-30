@@ -132,14 +132,23 @@ export class MessageRouter {
         });
       }
 
-      await this.manager.transitionState(room.id, resolution.nextState);
-
-      // If entering BREAKDOWN and we have a task breakdown service, create tasks
+      // If we have task breakdown service, skip BREAKDOWN and go directly to creating tasks
       if (resolution.nextState === RoomState.BREAKDOWN && this.taskBreakdownService) {
         try {
           await this.taskBreakdownService.createTasksFromPlan(
             room,
-            { id: result.decisionId } as any, // ConsensusDecision stub
+            {
+              id: result.decisionId,
+              roomId: room.id,
+              triggerMessageId: humanMessage.id,
+              correlationId: humanMessage.correlationId,
+              plan: result.plan,
+              debateRounds: result.rounds,
+              debateOutcome: result.debateOutcome,
+              unresolved: result.unresolved,
+              classification: result.classification,
+              createdAt: new Date(),
+            },
             result.plan,
           );
           await this.manager.transitionState(room.id, RoomState.EXECUTING);
@@ -152,6 +161,9 @@ export class MessageRouter {
           });
           await this.manager.transitionState(room.id, RoomState.ERROR);
         }
+      } else {
+        // No task breakdown service - follow normal state transition
+        await this.manager.transitionState(room.id, resolution.nextState);
       }
     } catch (error: unknown) {
       await this.repository.addMessage(room.id, {

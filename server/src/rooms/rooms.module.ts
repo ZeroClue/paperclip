@@ -38,6 +38,7 @@ export function registerRoomsModule(db: Db, api: Router, llmClient?: LLMClient):
     taskBreakdownService = new TaskBreakdownService(IssueService, repository);
   } catch {
     // IssueService not available — run without task breakdown
+    console.warn('[rooms] TaskBreakdownService unavailable: IssueService not found');
   }
 
   const synthesisService = new SynthesisService(repository, manager, llmClient ?? noopLLMClient);

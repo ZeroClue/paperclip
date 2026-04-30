@@ -546,8 +546,140 @@ describe('MessageRouter with task breakdown', () => {
     });
 
     // Wait for async consensus
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await vi.waitFor(() => {
+      expect(breakdownCalled).toBe(true);
+    }, { timeout: 3000 });
 
-    expect(breakdownCalled).toBe(true);
+    // Verify state transitions: CONSENSUS → EXECUTING (skipping BREAKDOWN)
+    expect(stateTransitions.some(t => t.to === RoomState.CONSENSUS)).toBe(true);
+    expect(stateTransitions.some(t => t.to === RoomState.EXECUTING)).toBe(true);
+    expect(stateTransitions.some(t => t.to === RoomState.BREAKDOWN)).toBe(false);
+  });
+
+  it('transitions to ERROR when task breakdown fails', async () => {
+    const messages: any[] = [];
+    const stateTransitions: Array<{ to: string }> = [];
+
+    const makeRoom = () => ({
+      id: 'room-1',
+      companyId: 'company-1',
+      name: 'engineering',
+      displayName: '#engineering',
+      description: null,
+      config: {
+        leader: {
+          agentId: '00000000-0000-0000-0000-000000000001',
+          systemPrompt: 'Leader system prompt for testing.',
+        },
+        devilsAdvocate: {
+          agentId: '00000000-0000-0000-0000-000000000002',
+          systemPrompt: 'Devil advocate system prompt for testing.',
+          aggressionLevel: 'medium',
+        },
+        workers: {
+          count: 1,
+          agentTemplate: {
+            systemPrompt: 'Worker system prompt for testing.',
+            model: 'gpt-4',
+          },
+        },
+        consensus: {
+          maxRounds: 3,
+          forceResolveStrategy: 'leader-decides',
+          escalationThreshold: 0.6,
+        },
+      },
+      currentMessageId: null,
+      linkedGoalId: null,
+      linkedProjectId: null,
+      monthlyBudgetUsd: '100.0000',
+      spentUsd: '0.0000',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const repo = {
+      getRoom: async () => makeRoom(),
+      addMessage: async (_roomId: string, msg: any) => {
+        const m = { id: 'msg-' + Math.random(), roomId: _roomId, ...msg, createdAt: new Date() };
+        messages.push(m);
+        return m;
+      },
+      updateState: async (_id: string, _state: string) => {
+        stateTransitions.push({ to: _state });
+      },
+      createConsensusDecision: async (data: any) => ({
+        id: 'decision-1',
+        ...data,
+        createdAt: new Date(),
+      }),
+      createDebateRound: async (data: any) => ({
+        id: 'debate-round-1',
+        ...data,
+        createdAt: new Date(),
+      }),
+    };
+
+    const manager = {
+      canAcceptMessages: async () => true,
+      transitionState: async (_id: string, state: RoomState) => {
+        stateTransitions.push({ to: state });
+      },
+    };
+
+    let llmCallIndex = 0;
+    const mockLLM = {
+      generateStructured: async () => {
+        llmCallIndex++;
+        if (llmCallIndex === 1) return { classification: 'complex', reason: 'Feature' };
+        if (llmCallIndex === 2) return {
+          classification: 'complex',
+          plan: [{
+            id: '00000000-0000-0000-0000-000000000001',
+            description: 'Test task',
+            roomId: 'room-1',
+            dependencies: [],
+            workerConfig: { extensions: [], skills: [] },
+            isIdempotent: true,
+            correlationId: 'corr-1',
+          }],
+          reasoning: 'Test',
+          changesFromPrevious: [],
+        };
+        return { decision: 'agree', points: [], confidence: 0.95 };
+      },
+    };
+
+    const mockBreakdownService = {
+      createTasksFromPlan: vi.fn(async () => {
+        throw new Error('Issue service unavailable');
+      }),
+    };
+
+    const router = new MessageRouter(
+      repo as any,
+      manager as any,
+      mockLLM as any,
+      mockBreakdownService as any,
+    );
+
+    await router.routeMessage('room-1', {
+      content: 'Build something',
+      correlationId: 'corr-002',
+    });
+
+    // Wait for async consensus and error handling
+    await vi.waitFor(() => {
+      const errorMsg = messages.find((m: any) => m.type === MessageType.ERROR);
+      expect(errorMsg).toBeDefined();
+      expect(errorMsg.content).toContain('Failed to create tasks');
+      expect(errorMsg.content).toContain('Issue service unavailable');
+    }, { timeout: 3000 });
+
+    // Verify state transitions: CONSENSUS → ERROR
+    expect(stateTransitions.some(t => t.to === RoomState.CONSENSUS)).toBe(true);
+    expect(stateTransitions.some(t => t.to === RoomState.ERROR)).toBe(true);
+    expect(stateTransitions.some(t => t.to === RoomState.BREAKDOWN)).toBe(false);
+    expect(stateTransitions.some(t => t.to === RoomState.EXECUTING)).toBe(false);
   });
 });
