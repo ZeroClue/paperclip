@@ -50,7 +50,11 @@ export class TaskCollector {
           status: WorkerSessionStatus.FAILED,
           errorDetails: { error: event.entity.error },
         });
-        await this.handleTaskFailure(session);
+        // Re-fetch session to get updated status for retry logic
+        const updatedSession = await this.repository.getWorkerSessionByIssue(session.issueId);
+        if (updatedSession) {
+          await this.handleTaskFailure(updatedSession);
+        }
         break;
     }
   }
@@ -70,6 +74,7 @@ export class TaskCollector {
   private async handleTaskFailure(session: any): Promise<void> {
     const isIdempotent = session.taskDefinition.isIdempotent;
 
+    // Session is already updated to FAILED by caller
     if (isIdempotent && session.status === WorkerSessionStatus.FAILED) {
       // Re-queue for retry by updating status back to pending
       await this.repository.updateWorkerSession(session.id, {
