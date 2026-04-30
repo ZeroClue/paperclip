@@ -97,6 +97,18 @@ export interface ConsensusDecision {
   createdAt: Date;
 }
 
+// ---------------------------------------------------------------------------
+// Worker Session Types
+// ---------------------------------------------------------------------------
+
+export enum WorkerSessionStatus {
+  PENDING = 'pending',
+  RUNNING = 'running',
+  COMPLETED = 'completed',
+  FAILED = 'failed',
+  CANCELLED = 'cancelled',
+}
+
 export interface DebateRound {
   id: string;
   consensusDecisionId: string;
@@ -116,12 +128,12 @@ export interface WorkerSession {
   roomId: string;
   consensusDecisionId: string;
   issueId: string;
-  taskDefinition: Record<string, unknown>;
-  status: string;
+  taskDefinition: TaskDefinition;
+  status: WorkerSessionStatus;
   piSessionId: string | null;
   piSessionFilePath: string | null;
   output: string | null;
-  costUsd: string;
+  costUsd: number;
   errorDetails: Record<string, unknown> | null;
   startedAt: Date | null;
   completedAt: Date | null;

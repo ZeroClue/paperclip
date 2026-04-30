@@ -14,6 +14,7 @@ import {
   DAResponseSchema,
   LeaderResponseSchema,
   ClassificationSchema,
+  WorkerSessionStatus,
 } from "../core/types.js";
 
 // ---------------------------------------------------------------------------
@@ -448,5 +449,19 @@ describe('ClassificationSchema', () => {
   it('rejects invalid classification', () => {
     const result = ClassificationSchema.safeParse({ classification: 'medium', reason: 'Invalid' });
     expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WorkerSessionStatus
+// ---------------------------------------------------------------------------
+
+describe('WorkerSessionStatus', () => {
+  it('has all expected values', () => {
+    expect(WorkerSessionStatus.PENDING).toBe('pending');
+    expect(WorkerSessionStatus.RUNNING).toBe('running');
+    expect(WorkerSessionStatus.COMPLETED).toBe('completed');
+    expect(WorkerSessionStatus.FAILED).toBe('failed');
+    expect(WorkerSessionStatus.CANCELLED).toBe('cancelled');
   });
 });
