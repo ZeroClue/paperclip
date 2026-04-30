@@ -5,6 +5,7 @@ import type { RoomRepository } from './RoomRepository.js';
 import type { RoomManager } from './RoomManager.js';
 import { ConsensusEngine } from '../consensus/ConsensusEngine.js';
 import { ResolutionStrategy } from '../consensus/ResolutionStrategy.js';
+import { TaskBreakdownService } from '../execution/TaskBreakdownService.js';
 
 export class RoomBusyError extends Error {
   constructor(public currentState: RoomState) {
@@ -18,6 +19,7 @@ export class MessageRouter {
     private repository: RoomRepository,
     private manager: RoomManager,
     private llmClient: LLMClient,
+    private taskBreakdownService?: TaskBreakdownService,
   ) {}
 
   async routeMessage(roomId: string, input: {
@@ -131,6 +133,26 @@ export class MessageRouter {
       }
 
       await this.manager.transitionState(room.id, resolution.nextState);
+
+      // If entering BREAKDOWN and we have a task breakdown service, create tasks
+      if (resolution.nextState === RoomState.BREAKDOWN && this.taskBreakdownService) {
+        try {
+          await this.taskBreakdownService.createTasksFromPlan(
+            room,
+            { id: result.decisionId } as any, // ConsensusDecision stub
+            result.plan,
+          );
+          await this.manager.transitionState(room.id, RoomState.EXECUTING);
+        } catch (error) {
+          await this.repository.addMessage(room.id, {
+            correlationId: humanMessage.correlationId,
+            type: MessageType.ERROR,
+            sender: 'system',
+            content: `Failed to create tasks: ${error instanceof Error ? error.message : String(error)}`,
+          });
+          await this.manager.transitionState(room.id, RoomState.ERROR);
+        }
+      }
     } catch (error: unknown) {
       await this.repository.addMessage(room.id, {
         correlationId: humanMessage.correlationId,

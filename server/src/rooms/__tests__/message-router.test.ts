@@ -171,7 +171,7 @@ describe('MessageRouter', () => {
       const repo = createMockRepo(RoomState.IDLE);
       const manager = new RoomManager(repo as any);
       const llmClient = createMockLLMClient('complex');
-      const router = new MessageRouter(repo as any, manager, llmClient);
+      const router = new MessageRouter(repo as any, manager, llmClient, undefined);
 
       const result = await router.routeMessage('room-1', {
         content: 'Build a new feature',
@@ -191,7 +191,7 @@ describe('MessageRouter', () => {
       const repo = createMockRepo(RoomState.IDLE);
       const manager = new RoomManager(repo as any);
       const llmClient = createMockLLMClient('complex');
-      const router = new MessageRouter(repo as any, manager, llmClient);
+      const router = new MessageRouter(repo as any, manager, llmClient, undefined);
 
       await router.routeMessage('room-1', {
         content: 'Build a new feature',
@@ -204,7 +204,7 @@ describe('MessageRouter', () => {
       const repo = createMockRepo(RoomState.CONSENSUS);
       const manager = new RoomManager(repo as any);
       const llmClient = createMockLLMClient('complex');
-      const router = new MessageRouter(repo as any, manager, llmClient);
+      const router = new MessageRouter(repo as any, manager, llmClient, undefined);
 
       try {
         await router.routeMessage('room-1', {
@@ -222,7 +222,7 @@ describe('MessageRouter', () => {
       const repo = createMockRepo(RoomState.IDLE);
       const manager = new RoomManager(repo as any);
       const llmClient = createMockLLMClient('complex');
-      const router = new MessageRouter(repo as any, manager, llmClient);
+      const router = new MessageRouter(repo as any, manager, llmClient, undefined);
 
       await expect(
         router.routeMessage('room-1', { content: '' }),
@@ -233,7 +233,7 @@ describe('MessageRouter', () => {
       const repo = createMockRepo(RoomState.IDLE);
       const manager = new RoomManager(repo as any);
       const llmClient = createMockLLMClient('complex');
-      const router = new MessageRouter(repo as any, manager, llmClient);
+      const router = new MessageRouter(repo as any, manager, llmClient, undefined);
 
       const result = await router.routeMessage('room-1', {
         content: 'No correlation ID given',
@@ -248,7 +248,7 @@ describe('MessageRouter', () => {
       const repo = createMockRepo(RoomState.IDLE);
       const manager = new RoomManager(repo as any);
       const llmClient = createMockLLMClient('complex');
-      const router = new MessageRouter(repo as any, manager, llmClient);
+      const router = new MessageRouter(repo as any, manager, llmClient, undefined);
 
       const customId = 'custom-correlation-123';
       const result = await router.routeMessage('room-1', {
@@ -263,7 +263,7 @@ describe('MessageRouter', () => {
       const repo = createMockRepo(RoomState.IDLE);
       const manager = new RoomManager(repo as any);
       const llmClient = createMockLLMClient('complex');
-      const router = new MessageRouter(repo as any, manager, llmClient);
+      const router = new MessageRouter(repo as any, manager, llmClient, undefined);
 
       await router.routeMessage('room-1', {
         content: 'Persist this message',
@@ -282,7 +282,7 @@ describe('MessageRouter', () => {
       const repo = createMockRepo(RoomState.IDLE);
       const manager = new RoomManager(repo as any);
       const llmClient = createMockLLMClient('complex');
-      const router = new MessageRouter(repo as any, manager, llmClient);
+      const router = new MessageRouter(repo as any, manager, llmClient, undefined);
 
       // canAcceptMessages calls getRoom internally, which throws for 'nonexistent'
       await expect(
@@ -301,7 +301,7 @@ describe('MessageRouter with consensus engine', () => {
     const repo = createMockRepo(RoomState.IDLE);
     const manager = new RoomManager(repo as any);
     const llmClient = createMockLLMClient('complex');
-    const router = new MessageRouter(repo as any, manager, llmClient);
+    const router = new MessageRouter(repo as any, manager, llmClient, undefined);
 
     const result = await router.routeMessage('room-1', {
       content: 'Build a complex distributed system with authentication',
@@ -341,7 +341,7 @@ describe('MessageRouter with consensus engine', () => {
     const repo = createMockRepo(RoomState.IDLE);
     const manager = new RoomManager(repo as any);
     const llmClient = createMockLLMClient('simple');
-    const router = new MessageRouter(repo as any, manager, llmClient);
+    const router = new MessageRouter(repo as any, manager, llmClient, undefined);
 
     const result = await router.routeMessage('room-1', {
       content: 'What is the status of the current sprint?',
@@ -369,7 +369,7 @@ describe('MessageRouter with consensus engine', () => {
     };
     const repo = createMockRepo(RoomState.IDLE);
     const manager = new RoomManager(repo as any);
-    const router = new MessageRouter(repo as any, manager, errorLLMClient);
+    const router = new MessageRouter(repo as any, manager, errorLLMClient, undefined);
 
     // The classification call will throw, so routeMessage itself should throw
     await expect(
@@ -407,7 +407,7 @@ describe('MessageRouter with consensus engine', () => {
 
     const repo = createMockRepo(RoomState.IDLE);
     const manager = new RoomManager(repo as any);
-    const router = new MessageRouter(repo as any, manager, failDuringDebateLLM);
+    const router = new MessageRouter(repo as any, manager, failDuringDebateLLM, undefined);
 
     // routeMessage should succeed (consensus runs async)
     const result = await router.routeMessage('room-1', {
@@ -423,5 +423,131 @@ describe('MessageRouter with consensus engine', () => {
       expect(errorMsg).toBeDefined();
       expect(errorMsg.content).toContain('Consensus engine error');
     }, { timeout: 2000 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task breakdown integration tests
+// ---------------------------------------------------------------------------
+
+describe('MessageRouter with task breakdown', () => {
+  it('triggers task breakdown after consensus', async () => {
+    const messages: any[] = [];
+    const stateTransitions: Array<{ to: string }> = [];
+
+    const makeRoom = () => ({
+      id: 'room-1',
+      companyId: 'company-1',
+      name: 'engineering',
+      displayName: '#engineering',
+      description: null,
+      config: {
+        leader: {
+          agentId: '00000000-0000-0000-0000-000000000001',
+          systemPrompt: 'Leader system prompt for testing.',
+        },
+        devilsAdvocate: {
+          agentId: '00000000-0000-0000-0000-000000000002',
+          systemPrompt: 'Devil advocate system prompt for testing.',
+          aggressionLevel: 'medium',
+        },
+        workers: {
+          count: 1,
+          agentTemplate: {
+            systemPrompt: 'Worker system prompt for testing.',
+            model: 'gpt-4',
+          },
+        },
+        consensus: {
+          maxRounds: 3,
+          forceResolveStrategy: 'leader-decides',
+          escalationThreshold: 0.6,
+        },
+      },
+      currentMessageId: null,
+      linkedGoalId: null,
+      linkedProjectId: null,
+      monthlyBudgetUsd: '100.0000',
+      spentUsd: '0.0000',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const repo = {
+      getRoom: async () => makeRoom(),
+      addMessage: async (_roomId: string, msg: any) => {
+        const m = { id: 'msg-' + Math.random(), roomId: _roomId, ...msg, createdAt: new Date() };
+        messages.push(m);
+        return m;
+      },
+      updateState: async (_id: string, _state: string) => {
+        stateTransitions.push({ to: _state });
+      },
+      createConsensusDecision: async (data: any) => ({
+        id: 'decision-1',
+        ...data,
+        createdAt: new Date(),
+      }),
+      createDebateRound: async (data: any) => ({
+        id: 'debate-round-1',
+        ...data,
+        createdAt: new Date(),
+      }),
+    };
+
+    const manager = {
+      canAcceptMessages: async () => true,
+      transitionState: async (_id: string, state: RoomState) => {
+        stateTransitions.push({ to: state });
+      },
+    };
+
+    let llmCallIndex = 0;
+    const mockLLM = {
+      generateStructured: async () => {
+        llmCallIndex++;
+        if (llmCallIndex === 1) return { classification: 'complex', reason: 'Feature' };
+        if (llmCallIndex === 2) return {
+          classification: 'complex',
+          plan: [{
+            id: '00000000-0000-0000-0000-000000000001',
+            description: 'Test task',
+            roomId: 'room-1',
+            dependencies: [],
+            workerConfig: { extensions: [], skills: [] },
+            isIdempotent: true,
+            correlationId: 'corr-1',
+          }],
+          reasoning: 'Test',
+          changesFromPrevious: [],
+        };
+        return { decision: 'agree', points: [], confidence: 0.95 };
+      },
+    };
+
+    let breakdownCalled = false;
+    const mockBreakdownService = {
+      createTasksFromPlan: vi.fn(async () => {
+        breakdownCalled = true;
+        return [];
+      }),
+    };
+
+    const router = new MessageRouter(
+      repo as any,
+      manager as any,
+      mockLLM as any,
+      mockBreakdownService as any,
+    );
+
+    await router.routeMessage('room-1', {
+      content: 'Build something',
+      correlationId: 'corr-001',
+    });
+
+    // Wait for async consensus
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    expect(breakdownCalled).toBe(true);
   });
 });

@@ -6,6 +6,9 @@ import { MessageRouter } from "./core/MessageRouter.js";
 import { RoomSSEController } from "./api/RoomSSEController.js";
 import { roomRoutes } from "./api/RoomController.js";
 import type { LLMClient } from "./core/types.js";
+import { TaskBreakdownService } from "./execution/TaskBreakdownService.js";
+import { TaskCollector } from "./execution/TaskCollector.js";
+import { SynthesisService } from "./execution/SynthesisService.js";
 
 const noopLLMClient: LLMClient = {
   generateStructured: async () => {
@@ -27,7 +30,25 @@ export function registerRoomsModule(db: Db, api: Router, llmClient?: LLMClient):
 
   const repository = new RoomRepository({ db });
   const manager = new RoomManager(repository);
-  const messageRouter = new MessageRouter(repository, manager, llmClient ?? noopLLMClient);
+
+  // Execution services (optional — requires Paperclip services)
+  let taskBreakdownService: TaskBreakdownService | undefined;
+  try {
+    const { IssueService } = await import("@paperclipai/services");
+    taskBreakdownService = new TaskBreakdownService(IssueService, repository);
+  } catch {
+    // IssueService not available — run without task breakdown
+  }
+
+  const synthesisService = new SynthesisService(repository, manager, llmClient ?? noopLLMClient);
+  const taskCollector = new TaskCollector(repository, manager, synthesisService);
+
+  const messageRouter = new MessageRouter(
+    repository,
+    manager,
+    llmClient ?? noopLLMClient,
+    taskBreakdownService,
+  );
   const sseController = new RoomSSEController();
 
   api.use(roomRoutes(repository, manager, messageRouter));
