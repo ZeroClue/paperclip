@@ -98,7 +98,6 @@ describe('SynthesisService', () => {
       generateStructured: vi.fn(async () => ({
         summary: 'All tasks completed successfully. Auth module and rate limiting implemented.',
         outcomes: ['Auth: JWT validation in auth.ts', 'Rate limiting: middleware added'],
-        totalCost: 2.30,
       })),
     };
 
@@ -196,7 +195,6 @@ describe('SynthesisService', () => {
       generateStructured: vi.fn(async () => ({
         summary: 'Partial completion. 1 of 2 tasks succeeded.',
         outcomes: ['Task 1: Done', 'Task 2: Failed - API timeout'],
-        totalCost: 1.50,
       })),
     };
 
@@ -208,6 +206,48 @@ describe('SynthesisService', () => {
     expect(mockLLM.generateStructured).toHaveBeenCalledWith(
       expect.stringContaining('Error:'),
       expect.any(Object),
+    );
+  });
+
+  it('handles empty sessions array', async () => {
+    const mockRepo = {
+      getRoom: vi.fn(async () => makeRoom()),
+      getWorkerSessions: vi.fn(async () => []),
+      addMessage: vi.fn(),
+      updateSpent: vi.fn(),
+    } as any;
+
+    const mockManager = {
+      transitionState: vi.fn(),
+    } as any;
+
+    const mockLLM: LLMClient = {
+      generateStructured: vi.fn(async () => ({
+        summary: 'No worker sessions were executed.',
+        outcomes: [],
+      })),
+    };
+
+    const service = new SynthesisService(mockRepo, mockManager, mockLLM);
+
+    await service.synthesize(ROOM_ID, CONSENSUS_ID);
+
+    // Total cost should be 0
+    expect(mockRepo.updateSpent).toHaveBeenCalledWith(ROOM_ID, '0.0000');
+
+    // LLM should be called with empty worker outputs
+    expect(mockLLM.generateStructured).toHaveBeenCalledWith(
+      expect.stringContaining('Worker Outputs'),
+      expect.any(Object),
+    );
+
+    // Synthesis message posted
+    expect(mockRepo.addMessage).toHaveBeenCalledWith(
+      ROOM_ID,
+      expect.objectContaining({
+        type: MessageType.SYNTHESIS,
+        metadata: { outcomes: [], totalCost: 0 },
+      }),
     );
   });
 });
