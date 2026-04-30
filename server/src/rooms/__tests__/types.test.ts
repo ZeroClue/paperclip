@@ -11,6 +11,9 @@ import {
   NotFoundError,
   DuplicateError,
   InvalidTransitionError,
+  DAResponseSchema,
+  LeaderResponseSchema,
+  ClassificationSchema,
 } from "../core/types.js";
 
 // ---------------------------------------------------------------------------
@@ -342,5 +345,108 @@ describe("Enums", () => {
 
   it("ErrorClass has 3 values", () => {
     expect(Object.keys(ErrorClass)).toHaveLength(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DAResponseSchema
+// ---------------------------------------------------------------------------
+
+describe('DAResponseSchema', () => {
+  it('accepts valid agree response', () => {
+    const result = DAResponseSchema.safeParse({ decision: 'agree', points: [], confidence: 0.95 });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts valid challenge response', () => {
+    const result = DAResponseSchema.safeParse({
+      decision: 'challenge',
+      points: ['The plan misses error handling', 'No fallback strategy'],
+      confidence: 0.8,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.points).toHaveLength(2);
+    }
+  });
+
+  it('rejects confidence outside 0-1', () => {
+    const result = DAResponseSchema.safeParse({ decision: 'agree', points: [], confidence: 1.5 });
+    expect(result.success).toBe(false);
+  });
+
+  it('applies defaults for points', () => {
+    const result = DAResponseSchema.parse({ decision: 'agree', confidence: 0.5 });
+    expect(result.points).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LeaderResponseSchema
+// ---------------------------------------------------------------------------
+
+describe('LeaderResponseSchema', () => {
+  it('accepts valid response with plan', () => {
+    const result = LeaderResponseSchema.safeParse({
+      plan: [{
+        id: '00000000-0000-0000-0000-000000000001',
+        description: 'Create auth module',
+        roomId: '00000000-0000-0000-0000-000000000002',
+        dependencies: [],
+        workerConfig: { extensions: [], skills: [] },
+        isIdempotent: true,
+        correlationId: '00000000-0000-0000-0000-000000000003',
+      }],
+      reasoning: 'We need auth first',
+      changesFromPrevious: [],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects plan with non-UUID task id', () => {
+    const result = LeaderResponseSchema.safeParse({
+      plan: [{
+        id: 'not-a-uuid',
+        description: 'Bad task',
+        roomId: '00000000-0000-0000-0000-000000000002',
+        dependencies: [],
+        workerConfig: { extensions: [], skills: [] },
+        isIdempotent: true,
+        correlationId: '00000000-0000-0000-0000-000000000003',
+      }],
+      reasoning: 'Bad',
+      changesFromPrevious: [],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects empty reasoning', () => {
+    const result = LeaderResponseSchema.safeParse({
+      plan: [],
+      reasoning: '',
+      changesFromPrevious: [],
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ClassificationSchema
+// ---------------------------------------------------------------------------
+
+describe('ClassificationSchema', () => {
+  it('accepts simple classification', () => {
+    const result = ClassificationSchema.safeParse({ classification: 'simple', reason: 'Status check' });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts complex classification', () => {
+    const result = ClassificationSchema.safeParse({ classification: 'complex', reason: 'Feature request' });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects invalid classification', () => {
+    const result = ClassificationSchema.safeParse({ classification: 'medium', reason: 'Invalid' });
+    expect(result.success).toBe(false);
   });
 });

@@ -198,6 +198,35 @@ export const PatchStateSchema = z.object({
 
 export type PatchStateInput = z.infer<typeof PatchStateSchema>;
 
+export const DAResponseSchema = z.object({
+  decision: z.enum(["agree", "challenge"]),
+  points: z.array(z.string()).default([]),
+  confidence: z.number().min(0).max(1),
+});
+
+export const LeaderResponseSchema = z.object({
+  plan: z.array(z.object({
+    id: z.string().uuid(),
+    description: z.string().min(1),
+    roomId: z.string().uuid(),
+    dependencies: z.array(z.string().uuid()).default([]),
+    workerConfig: z.object({
+      extensions: z.array(z.string()).default([]),
+      skills: z.array(z.string()).default([]),
+      systemPromptOverride: z.string().optional(),
+    }),
+    isIdempotent: z.boolean().default(true),
+    correlationId: z.string().uuid(),
+  })),
+  reasoning: z.string().min(1),
+  changesFromPrevious: z.array(z.string()).default([]),
+});
+
+export const ClassificationSchema = z.object({
+  classification: z.enum(["simple", "complex"]),
+  reason: z.string(),
+});
+
 // ---------------------------------------------------------------------------
 // API Response Types
 // ---------------------------------------------------------------------------
@@ -223,6 +252,7 @@ export interface PostMessageResponse {
   type: MessageType;
   sender: string;
   createdAt: Date;
+  classification?: MessageClassification;
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +281,64 @@ export interface SSEErrorEvent extends SSEEvent {
 }
 
 export type SSEEventType = SSEMessageEvent | SSEStateEvent | SSEErrorEvent;
+
+// ---------------------------------------------------------------------------
+// Consensus Types
+// ---------------------------------------------------------------------------
+
+export type MessageClassification = "simple" | "complex";
+
+export interface DAResponse {
+  decision: "agree" | "challenge";
+  points: string[];
+  confidence: number;
+}
+
+export interface LeaderResponse {
+  plan: TaskDefinition[];
+  reasoning: string;
+  changesFromPrevious: string[];
+}
+
+export interface TaskDefinition {
+  id: string;
+  description: string;
+  roomId: string;
+  dependencies: string[];
+  workerConfig: {
+    extensions: string[];
+    skills: string[];
+    systemPromptOverride?: string;
+  };
+  isIdempotent: boolean;
+  correlationId: string;
+}
+
+export interface ConsensusResult {
+  decisionId: string;
+  classification: MessageClassification;
+  plan: TaskDefinition[];
+  debateOutcome: "unanimous" | "forced_leader" | "forced_escalated" | "bypassed";
+  rounds: number;
+  unresolved?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// LLM Client Interface
+// ---------------------------------------------------------------------------
+
+export interface LLMMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export interface LLMClient {
+  generateStructured<T>(
+    prompt: string,
+    schema: z.ZodType<T>,
+    options?: { model?: string; temperature?: number; systemPrompt?: string },
+  ): Promise<T>;
+}
 
 // ---------------------------------------------------------------------------
 // Error Classes
