@@ -65,10 +65,9 @@ export const modelProfiles: AdapterModelProfileDefinition[] = [
   {
     key: "cheap",
     label: "Cheap",
-    description: "Use OpenCode's known Codex mini model as the budget lane.",
+    description: "Use deepseek-v4-flash as the budget lane.",
     adapterConfig: {
-      model: "openai/gpt-5.1-codex-mini",
-      variant: "low",
+      model: "opencode-go/deepseek-v4-flash",
     },
     source: "adapter_default",
   },
