@@ -63,16 +63,15 @@ export const models: Array<{ id: string; label: string }> = [
   { id: "openai/gpt-5.1-codex-mini", label: "openai/gpt-5.1-codex-mini" },
 ];
 
-export const DEFAULT_OPENCODE_CHEAP_MODEL = "openai/gpt-5.1-codex-mini";
+export const DEFAULT_OPENCODE_CHEAP_MODEL = "opencode-go/deepseek-v4-flash";
 
 // The "cheap" budget profile (used for recovery retries and other low-cost lanes).
-// Defaults to OpenCode's known Codex mini model, but is overridable so a deployment
+// Defaults to deepseek-v4-flash, but is overridable so a deployment
 // routing through a gateway that does not serve that model (e.g. an EU LLM gateway)
 // can point the budget lane at a gateway-served model instead -- otherwise recovery
 // retries fail with "model not found". PAPERCLIP_OPENCODE_CHEAP_MODEL takes priority;
 // PAPERCLIP_OPENCODE_SMALL_MODEL (the auxiliary/title model) is reused as a sensible
-// fallback so a single setting covers both budget lanes. The default keeps the
-// upstream behaviour (with the Codex `variant: "low"`).
+// fallback so a single setting covers both budget lanes.
 //
 // This module is shared client/server code (the UI imports it for
 // DEFAULT_OPENCODE_LOCAL_MODEL etc.), so it must not touch the global `process`
@@ -92,6 +91,9 @@ export function buildOpenCodeModelProfiles(
         ? { model: override }
         : { model: DEFAULT_OPENCODE_CHEAP_MODEL, variant: "low" },
       source: "adapter_default",
+    },
+  ];
+}
     },
   ];
 }
