@@ -206,6 +206,12 @@ export {
   type PluginApiRouteCheckoutPolicy,
   type PluginEventType,
   type PluginBridgeErrorCode,
+  BRIDGE_TRANSFER_STATUSES,
+  ROUTE_EVALUATION_STRATEGIES,
+  ROUTE_PROBE_OUTCOMES,
+  type BridgeTransferStatus,
+  type RouteEvaluationStrategy,
+  type RouteProbeOutcome,
 } from "./constants.js";
 
 export {
@@ -515,6 +521,11 @@ export type {
   PluginWebhookDeliveryRecord,
   QuotaWindow,
   ProviderQuotaResult,
+  BridgeTransfer,
+  RouteProbePayload,
+  RouteProbeResult,
+  RouteEvaluationInput,
+  RouteEvaluationResult,
 } from "./types/index.js";
 export {
   ISSUE_REFERENCE_IDENTIFIER_RE,

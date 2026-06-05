@@ -337,3 +337,10 @@ export type {
   PluginDatabaseNamespaceMode,
   PluginDatabaseNamespaceStatus,
 } from "./plugin.js";
+export type {
+  BridgeTransfer,
+  RouteProbePayload,
+  RouteProbeResult,
+  RouteEvaluationInput,
+  RouteEvaluationResult,
+} from "./route-evaluation.js";

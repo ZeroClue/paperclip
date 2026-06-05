@@ -916,3 +916,27 @@ export const PLUGIN_BRIDGE_ERROR_CODES = [
   "UNKNOWN",
 ] as const;
 export type PluginBridgeErrorCode = (typeof PLUGIN_BRIDGE_ERROR_CODES)[number];
+
+export const BRIDGE_TRANSFER_STATUSES = [
+  "pending",
+  "probing",
+  "direct",
+  "fallback",
+  "failed",
+] as const;
+export type BridgeTransferStatus = (typeof BRIDGE_TRANSFER_STATUSES)[number];
+
+export const ROUTE_EVALUATION_STRATEGIES = [
+  "probe_agent",
+  "direct",
+  "smart_pipe",
+] as const;
+export type RouteEvaluationStrategy = (typeof ROUTE_EVALUATION_STRATEGIES)[number];
+
+export const ROUTE_PROBE_OUTCOMES = [
+  "reachable",
+  "unreachable",
+  "timeout",
+  "error",
+] as const;
+export type RouteProbeOutcome = (typeof ROUTE_PROBE_OUTCOMES)[number];
