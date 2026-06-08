@@ -60,7 +60,7 @@ function pushTemplateEvent(
 ) {
   publishLiveEvent({
     companyId,
-    type: eventType as unknown as Parameters<typeof publishLiveEvent>[0]["type"],
+    type: eventType,
     payload: { template },
   });
 }
