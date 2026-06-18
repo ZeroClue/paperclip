@@ -94,9 +94,6 @@ export function buildOpenCodeModelProfiles(
     },
   ];
 }
-    },
-  ];
-}
 
 export const modelProfiles: AdapterModelProfileDefinition[] = buildOpenCodeModelProfiles();
 
