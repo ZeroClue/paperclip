@@ -685,9 +685,28 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
       ? "Paperclip Computer"
       : "Local";
 
+  // Model discovery targets the agent's own adapter runtime when a connection
+  // config is present, so the dropdown reflects the configured (or pending)
+  // host/port/credentials instead of the adapter default connection.
+  const modelDiscoveryAdapterConfig = useMemo(() => {
+    if (!selectedCompanyId) return undefined;
+    if (isCreate) {
+      return omitUndefinedEntries(uiAdapter.buildAdapterConfig(val!));
+    }
+    return omitUndefinedEntries({ ...config, ...overlay.adapterConfig });
+  }, [selectedCompanyId, isCreate, val, uiAdapter, config, overlay.adapterConfig]);
+  const modelDiscoveryConfigJson = modelDiscoveryAdapterConfig
+    ? JSON.stringify(modelDiscoveryAdapterConfig)
+    : null;
+
   // Fetch adapter models for the effective adapter type
   const modelQueryKey = selectedCompanyId
-    ? queryKeys.agents.adapterModels(selectedCompanyId, adapterType, currentDefaultEnvironmentId || null)
+    ? queryKeys.agents.adapterModels(
+        selectedCompanyId,
+        adapterType,
+        currentDefaultEnvironmentId || null,
+        modelDiscoveryConfigJson,
+      )
     : ["agents", "none", "adapter-models", adapterType];
   const {
     data: fetchedModels,
@@ -696,6 +715,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     queryKey: modelQueryKey,
     queryFn: () => agentsApi.adapterModels(selectedCompanyId!, adapterType, {
       environmentId: currentDefaultEnvironmentId || null,
+      adapterConfig: modelDiscoveryAdapterConfig,
     }),
     enabled: Boolean(selectedCompanyId),
   });
@@ -1150,7 +1170,11 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     setRefreshingModels(true);
     setRefreshModelsError(null);
     try {
-      const refreshed = await agentsApi.adapterModels(selectedCompanyId, adapterType, { refresh: true });
+      const refreshed = await agentsApi.adapterModels(selectedCompanyId, adapterType, {
+        refresh: true,
+        environmentId: currentDefaultEnvironmentId || null,
+        adapterConfig: modelDiscoveryAdapterConfig,
+      });
       queryClient.setQueryData(modelQueryKey, refreshed);
     } catch (error) {
       setRefreshModelsError(error instanceof Error ? error.message : "Failed to refresh adapter models.");

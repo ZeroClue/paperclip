@@ -1,4 +1,5 @@
 import type { ProviderQuotaResult } from "@paperclipai/shared";
+import type { AdapterDiscoveryContext } from "@paperclipai/adapter-utils";
 import { listServerAdapters } from "../adapters/registry.js";
 
 const QUOTA_PROVIDER_TIMEOUT_MS = 20_000;
@@ -19,12 +20,20 @@ function providerSlugForAdapterType(type: string): string {
  * Adapters that don't implement getQuotaWindows() are silently skipped.
  * Individual adapter failures are caught and returned as error results rather than
  * letting one provider's outage block the entire response.
+ *
+ * `ctxs` optionally supplies a per-adapter-type discovery context so a shared
+ * external adapter can target a specific agent's configuration; adapters without
+ * an entry fall back to their default connection.
  */
-export async function fetchAllQuotaWindows(): Promise<ProviderQuotaResult[]> {
+export async function fetchAllQuotaWindows(
+  ctxs?: Readonly<Record<string, AdapterDiscoveryContext>>,
+): Promise<ProviderQuotaResult[]> {
   const adapters = listServerAdapters().filter((a) => a.getQuotaWindows != null);
 
   const settled = await Promise.allSettled(
-    adapters.map((adapter) => withQuotaTimeout(adapter.type, adapter.getQuotaWindows!())),
+    adapters.map((adapter) =>
+      withQuotaTimeout(adapter.type, adapter.getQuotaWindows!(ctxs?.[adapter.type])),
+    ),
   );
 
   return settled.map((result, i) => {

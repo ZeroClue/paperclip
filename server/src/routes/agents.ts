@@ -74,6 +74,7 @@ import { environmentRuntimeService } from "../services/environment-runtime.js";
 import { resolvePluginSandboxProviderDriverByKey } from "../services/plugin-environment-driver.js";
 import type { AdapterExecutionTarget } from "@paperclipai/adapter-utils/execution-target";
 import type {
+  AdapterDiscoveryContext,
   AdapterEnvironmentCheck,
   AdapterEnvironmentTestResult,
   AdapterModelProfileDefinition,
@@ -2344,6 +2345,62 @@ export function agentRoutes(
     }
   });
 
+  /**
+   * Build an optional per-agent discovery context for the model/profile/quota
+   * hooks. Supports two inputs (adapterConfig wins when both are present):
+   *  - `adapterConfig` — prospective, non-persisted config (create flows), secret
+   *    refs resolved owner-scoped against the acting user.
+   *  - `agentId` — persisted agent config, resolved like the skills route.
+   * Returns undefined when neither is provided so server-internal callers keep
+   * the legacy zero-ctx behavior (adapter falls back to its default connection).
+   */
+  async function resolveAdapterDiscoveryContext(
+    req: Request,
+    type: string,
+  ): Promise<AdapterDiscoveryContext | undefined> {
+    const companyId = req.params.companyId as string;
+    const rawProspective = asNonEmptyString(req.query.adapterConfig);
+    if (rawProspective) {
+      let prospective: unknown;
+      try {
+        prospective = JSON.parse(rawProspective);
+      } catch {
+        throw badRequest("adapterConfig must be a valid JSON object");
+      }
+      if (prospective === null || typeof prospective !== "object" || Array.isArray(prospective)) {
+        throw badRequest("adapterConfig must be a JSON object");
+      }
+      const normalizedAdapterConfig = await secretsSvc.normalizeAdapterConfigForPersistence(
+        companyId,
+        prospective as Record<string, unknown>,
+        { strictMode: strictSecretsMode, adapterType: type },
+      );
+      const { config } = await secretsSvc.resolveAdapterConfigForRuntime(
+        companyId,
+        normalizedAdapterConfig,
+        buildActorSecretContext(req, { consumerType: "system", consumerId: "adapter_models" }),
+        { adapterType: type, userSecretMediation: "owner_scoped" },
+      );
+      return { adapterType: type, config };
+    }
+    const agentId = asNonEmptyString(req.query.agentId);
+    if (agentId) {
+      const agent = await svc.getById(agentId);
+      if (!agent) {
+        throw notFound("Agent not found");
+      }
+      assertCompanyAccess(req, agent.companyId);
+      const { config } = await secretsSvc.resolveAdapterConfigForRuntime(
+        agent.companyId,
+        agent.adapterConfig,
+        buildActorSecretContext(req, { consumerType: "agent", consumerId: agent.id }),
+        { adapterType: type, skipUserSecrets: true },
+      );
+      return { agentId: agent.id, companyId: agent.companyId, adapterType: type, config };
+    }
+    return undefined;
+  }
+
   router.get("/companies/:companyId/adapters/:type/models", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
@@ -2362,9 +2419,10 @@ export function agentRoutes(
       res.json(adapter.models ?? []);
       return;
     }
+    const discoveryContext = await resolveAdapterDiscoveryContext(req, type);
     const models = refresh
-      ? await refreshAdapterModels(type)
-      : await listAdapterModels(type);
+      ? await refreshAdapterModels(type, discoveryContext)
+      : await listAdapterModels(type, discoveryContext);
     res.json(models);
   });
 
@@ -2372,7 +2430,8 @@ export function agentRoutes(
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const type = assertKnownAdapterType(req.params.type as string);
-    const profiles = await listAdapterModelProfiles(type);
+    const discoveryContext = await resolveAdapterDiscoveryContext(req, type);
+    const profiles = await listAdapterModelProfiles(type, discoveryContext);
     res.json(profiles);
   });
 
