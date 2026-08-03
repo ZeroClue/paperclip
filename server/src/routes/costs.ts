@@ -20,8 +20,10 @@ import {
   accessService,
   logActivity,
 } from "../services/index.js";
-import { assertBoard, assertCompanyAccess, getAccessibleResource, getActorInfo } from "./authz.js";
+import { assertBoard, assertCompanyAccess, getAccessibleResource, getActorInfo, buildActorSecretContext } from "./authz.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
+import { secretService } from "../services/secrets.js";
+import type { AdapterDiscoveryContext } from "@paperclipai/adapter-utils";
 import { badRequest } from "../errors.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
@@ -63,6 +65,7 @@ export function costRoutes(
   const agents = agentService(db);
   const issues = issueService(db);
   const access = accessService(db);
+  const secretsSvc = secretService(db);
 
   async function resolveIssueByRef(rawId: string) {
     const identifier = normalizeIssueIdentifier(rawId);
@@ -281,7 +284,36 @@ export function costRoutes(
       res.status(404).json({ error: "Company not found" });
       return;
     }
-    const results = await fetchAllQuotaWindows();
+    // Optional per-agent scoping: when the caller selects a specific agent, its
+    // adapter config is resolved and supplied as a discovery context so a shared
+    // external adapter (e.g. opencode_server) polls the agent's own runtime.
+    const agentId = typeof req.query.agentId === "string" && req.query.agentId.trim()
+      ? req.query.agentId
+      : null;
+    let ctxs: Record<string, AdapterDiscoveryContext> | undefined;
+    if (agentId) {
+      const agent = await agents.getById(agentId);
+      if (!agent) {
+        res.status(404).json({ error: "Agent not found" });
+        return;
+      }
+      assertCompanyAccess(req, agent.companyId);
+      const { config } = await secretsSvc.resolveAdapterConfigForRuntime(
+        agent.companyId,
+        agent.adapterConfig,
+        buildActorSecretContext(req, { consumerType: "agent", consumerId: agent.id }),
+        { adapterType: agent.adapterType, skipUserSecrets: true },
+      );
+      ctxs = {
+        [agent.adapterType]: {
+          agentId: agent.id,
+          companyId: agent.companyId,
+          adapterType: agent.adapterType,
+          config,
+        },
+      };
+    }
+    const results = await fetchAllQuotaWindows(ctxs);
     res.json(results);
   });
 

@@ -27,6 +27,9 @@ const mockSecretService = vi.hoisted(() => ({
   normalizeAdapterConfigForPersistence: vi.fn(async (_companyId: string, config: Record<string, unknown>) => config),
   resolveAdapterConfigForRuntime: vi.fn(async (_companyId: string, config: Record<string, unknown>) => ({ config })),
 }));
+const mockAgentService = vi.hoisted(() => ({
+  getById: vi.fn(),
+}));
 const mockEnvironmentService = vi.hoisted(() => ({
   getById: vi.fn(),
 }));
@@ -76,7 +79,7 @@ function registerModuleMocks() {
   });
 
   vi.doMock("../services/index.js", () => ({
-    agentService: () => ({}),
+    agentService: () => mockAgentService,
     agentInstructionsService: () => mockAgentInstructionsService,
     accessService: () => mockAccessService,
     approvalService: () => mockApprovalService,
@@ -174,6 +177,8 @@ describe("adapter model refresh route", () => {
     mockLogActivity.mockResolvedValue(undefined);
     mockEnvironmentService.getById.mockReset();
     mockEnvironmentService.getById.mockResolvedValue(null);
+    mockAgentService.getById.mockReset();
+    mockAgentService.getById.mockResolvedValue(null);
     mockListOpenCodeModels.mockReset();
     mockListOpenCodeModels.mockResolvedValue([{ id: "dynamic-opencode-model", label: "dynamic-opencode-model" }]);
     await unregisterTestAdapter(refreshableAdapterType);
@@ -248,5 +253,110 @@ describe("adapter model refresh route", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body).toEqual([{ id: "dynamic-opencode-model", label: "dynamic-opencode-model" }]);
     expect(mockListOpenCodeModels).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards a prospective adapterConfig as the discovery context to listModels", async () => {
+    const listModels = vi.fn(async (ctx?: { config?: Record<string, unknown> }) =>
+      ctx?.config?.hostname
+        ? [{ id: `model-${ctx.config.hostname}`, label: `model-${ctx.config.hostname}` }]
+        : [],
+    );
+    const { registerServerAdapter } = await import("../adapters/index.js");
+    registerServerAdapter({
+      type: refreshableAdapterType,
+      execute: async () => ({ exitCode: 0, signal: null, timedOut: false }),
+      testEnvironment: async () => ({
+        adapterType: refreshableAdapterType,
+        status: "pass",
+        checks: [],
+        testedAt: new Date(0).toISOString(),
+      }),
+      listModels,
+    } as ServerAdapterModule);
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .get(`/api/companies/company-1/adapters/${refreshableAdapterType}/models`)
+        .query({ adapterConfig: JSON.stringify({ hostname: "10.0.0.7", port: 4096 }) }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body).toEqual([{ id: "model-10.0.0.7", label: "model-10.0.0.7" }]);
+    expect(listModels).toHaveBeenCalledTimes(1);
+    expect(listModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterType: refreshableAdapterType,
+        config: { hostname: "10.0.0.7", port: 4096 },
+      }),
+    );
+  });
+
+  it("resolves an agent's persisted adapter config and forwards it as the discovery context", async () => {
+    const listModels = vi.fn(async (ctx?: { config?: Record<string, unknown> }) =>
+      ctx?.config?.hostname
+        ? [{ id: `model-${ctx.config.hostname}`, label: `model-${ctx.config.hostname}` }]
+        : [],
+    );
+    mockAgentService.getById.mockResolvedValue({
+      id: "agent-1",
+      companyId: "company-1",
+      adapterType: refreshableAdapterType,
+      adapterConfig: { hostname: "10.0.0.5", port: 4096, password: "s3cret" },
+    });
+    const { registerServerAdapter } = await import("../adapters/index.js");
+    registerServerAdapter({
+      type: refreshableAdapterType,
+      execute: async () => ({ exitCode: 0, signal: null, timedOut: false }),
+      testEnvironment: async () => ({
+        adapterType: refreshableAdapterType,
+        status: "pass",
+        checks: [],
+        testedAt: new Date(0).toISOString(),
+      }),
+      listModels,
+    } as ServerAdapterModule);
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl).get(`/api/companies/company-1/adapters/${refreshableAdapterType}/models`).query({
+        agentId: "agent-1",
+      }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body).toEqual([{ id: "model-10.0.0.5", label: "model-10.0.0.5" }]);
+    expect(mockAgentService.getById).toHaveBeenCalledWith("agent-1");
+    expect(listModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "agent-1",
+        companyId: "company-1",
+        adapterType: refreshableAdapterType,
+        config: { hostname: "10.0.0.5", port: 4096, password: "s3cret" },
+      }),
+    );
+  });
+
+  it("rejects malformed adapterConfig with a 400", async () => {
+    const { registerServerAdapter } = await import("../adapters/index.js");
+    registerServerAdapter({
+      type: refreshableAdapterType,
+      execute: async () => ({ exitCode: 0, signal: null, timedOut: false }),
+      testEnvironment: async () => ({
+        adapterType: refreshableAdapterType,
+        status: "pass",
+        checks: [],
+        testedAt: new Date(0).toISOString(),
+      }),
+    } as ServerAdapterModule);
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .get(`/api/companies/company-1/adapters/${refreshableAdapterType}/models`)
+        .query({ adapterConfig: "not-json" }),
+    );
+
+    expect(res.status).toBe(400);
   });
 });

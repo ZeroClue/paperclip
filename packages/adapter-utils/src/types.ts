@@ -307,6 +307,21 @@ export interface AdapterSkillContext {
   config: Record<string, unknown>;
 }
 
+/**
+ * Optional context for adapter discovery hooks (model/profile/quota listing).
+ * Lets a single shared adapter instance target a specific agent's configuration
+ * (e.g. an external runtime reachable only at per-agent hostname/port/credentials)
+ * without maintaining per-agent module instances. Absent or partially filled for
+ * server-internal callers that only know the adapter type; the adapter must fall
+ * back to its default connection in that case.
+ */
+export interface AdapterDiscoveryContext {
+  agentId?: string;
+  companyId?: string;
+  adapterType: string;
+  config: Record<string, unknown>;
+}
+
 export interface AdapterEnvironmentTestContext {
   companyId: string;
   adapterType: string;
@@ -454,16 +469,16 @@ export interface ServerAdapterModule {
   /** How this adapter receives Paperclip's run-scoped control tools. */
   runtimeToolDelivery?: AdapterRuntimeToolDelivery;
   models?: AdapterModel[];
-  listModels?: () => Promise<AdapterModel[]>;
+  listModels?: (ctx?: AdapterDiscoveryContext) => Promise<AdapterModel[]>;
   modelProfiles?: AdapterModelProfileDefinition[];
-  listModelProfiles?: () => Promise<AdapterModelProfileDefinition[]>;
+  listModelProfiles?: (ctx?: AdapterDiscoveryContext) => Promise<AdapterModelProfileDefinition[]>;
   /**
    * Optional explicit refresh hook for model discovery.
    * Use this when the adapter caches discovered models and needs a bypass path
    * so the UI can fetch newly released models without waiting for cache expiry
    * or a Paperclip code update.
    */
-  refreshModels?: () => Promise<AdapterModel[]>;
+  refreshModels?: (ctx?: AdapterDiscoveryContext) => Promise<AdapterModel[]>;
   agentConfigurationDoc?: string;
   /**
    * Optional lifecycle hook when an agent is approved/hired (join-request or hire_agent approval).
@@ -478,7 +493,7 @@ export interface ServerAdapterModule {
    * Returns a ProviderQuotaResult so the server can aggregate across adapters
    * without knowing provider-specific credential paths or API shapes.
    */
-  getQuotaWindows?: () => Promise<ProviderQuotaResult>;
+  getQuotaWindows?: (ctx?: AdapterDiscoveryContext) => Promise<ProviderQuotaResult>;
   /**
    * Optional: detect the currently configured model from local config files.
    * Returns the detected model/provider and the config source, or null if

@@ -22,6 +22,7 @@ export type {
   AdapterSkillEntry,
   AdapterSkillSnapshot,
   AdapterSkillContext,
+  AdapterDiscoveryContext,
   AdapterSessionCodec,
   AdapterModel,
   AdapterModelProfileKey,

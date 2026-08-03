@@ -53,4 +53,49 @@ describe("fetchAllQuotaWindows", () => {
       },
     ]);
   });
+
+  it("passes the per-adapter discovery context to the matching adapter's getQuotaWindows", async () => {
+    const opencodeQuota = vi.fn().mockResolvedValue({
+      provider: "opencode_server",
+      source: "server",
+      ok: true,
+      windows: [],
+    });
+    const claudeQuota = vi.fn().mockResolvedValue({
+      provider: "anthropic",
+      ok: true,
+      windows: [],
+    });
+    vi.mocked(listServerAdapters).mockReturnValue([
+      { type: "opencode_server", getQuotaWindows: opencodeQuota },
+      { type: "claude_local", getQuotaWindows: claudeQuota },
+    ] as never);
+
+    const ctx = {
+      agentId: "agent-1",
+      companyId: "co-1",
+      adapterType: "opencode_server",
+      config: { hostname: "10.0.0.5", port: 4096 },
+    };
+    const results = await fetchAllQuotaWindows({ opencode_server: ctx });
+
+    expect(results).toHaveLength(2);
+    expect(opencodeQuota).toHaveBeenCalledWith(ctx);
+    expect(claudeQuota).toHaveBeenCalledWith(undefined);
+  });
+
+  it("calls getQuotaWindows without a context when none is provided", async () => {
+    const opencodeQuota = vi.fn().mockResolvedValue({
+      provider: "opencode_server",
+      ok: true,
+      windows: [],
+    });
+    vi.mocked(listServerAdapters).mockReturnValue([
+      { type: "opencode_server", getQuotaWindows: opencodeQuota },
+    ] as never);
+
+    await fetchAllQuotaWindows();
+
+    expect(opencodeQuota).toHaveBeenCalledWith(undefined);
+  });
 });

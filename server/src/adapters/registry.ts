@@ -1,4 +1,5 @@
 import type {
+  AdapterDiscoveryContext,
   AdapterModelProfileDefinition,
   AdapterRuntimeCommandSpec,
   ServerAdapterModule,
@@ -780,7 +781,10 @@ function getDeclaredAdapterModels(): ReturnType<typeof parseAdapterModelsEnv> {
   return value;
 }
 
-export async function listAdapterModels(type: string): Promise<{ id: string; label: string }[]> {
+export async function listAdapterModels(
+  type: string,
+  ctx?: AdapterDiscoveryContext,
+): Promise<{ id: string; label: string }[]> {
   const declaredModels = getDeclaredAdapterModels();
   if (declaredModels && declaredModels[type]?.length) {
     return declaredModels[type].map((m) => ({ id: m.id, label: m.label ?? m.id }));
@@ -788,31 +792,37 @@ export async function listAdapterModels(type: string): Promise<{ id: string; lab
   const adapter = findActiveServerAdapter(type);
   if (!adapter) return [];
   if (adapter.listModels) {
-    const discovered = await adapter.listModels();
+    const discovered = await adapter.listModels(ctx);
     if (discovered.length > 0) return discovered;
   }
   return adapter.models ?? [];
 }
 
-export async function refreshAdapterModels(type: string): Promise<{ id: string; label: string }[]> {
+export async function refreshAdapterModels(
+  type: string,
+  ctx?: AdapterDiscoveryContext,
+): Promise<{ id: string; label: string }[]> {
   const adapter = findActiveServerAdapter(type);
   if (!adapter) return [];
   if (adapter.refreshModels) {
-    const refreshed = await adapter.refreshModels();
+    const refreshed = await adapter.refreshModels(ctx);
     if (refreshed.length > 0) return refreshed;
   }
   if (adapter.listModels) {
-    const discovered = await adapter.listModels();
+    const discovered = await adapter.listModels(ctx);
     if (discovered.length > 0) return discovered;
   }
   return adapter.models ?? [];
 }
 
-export async function listAdapterModelProfiles(type: string): Promise<AdapterModelProfileDefinition[]> {
+export async function listAdapterModelProfiles(
+  type: string,
+  ctx?: AdapterDiscoveryContext,
+): Promise<AdapterModelProfileDefinition[]> {
   const adapter = findActiveServerAdapter(type);
   if (!adapter) return [];
   if (adapter.listModelProfiles) {
-    const discovered = await adapter.listModelProfiles();
+    const discovered = await adapter.listModelProfiles(ctx);
     if (discovered.length > 0) return discovered;
   }
   return adapter.modelProfiles ?? [];

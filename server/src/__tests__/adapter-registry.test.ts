@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { buildSandboxNpmInstallCommand } from "@paperclipai/adapter-utils";
-import type { ServerAdapterModule } from "../adapters/index.js";
+import type { AdapterDiscoveryContext, ServerAdapterModule } from "../adapters/index.js";
 
 import {
   detectAdapterModel,
@@ -8,6 +8,7 @@ import {
   findServerAdapter,
   listAdapterModels,
   listAdapterModelProfiles,
+  refreshAdapterModels,
   registerServerAdapter,
   requireServerAdapter,
   unregisterServerAdapter,
@@ -96,6 +97,69 @@ describe("server adapter registry", () => {
     expect(() => requireServerAdapter("external_test")).toThrow(
       "Unknown adapter type: external_test",
     );
+  });
+
+  it("forwards the optional discovery context to ctx-aware discovery hooks", async () => {
+    const listModels = vi.fn(async (ctx?: AdapterDiscoveryContext) =>
+      ctx?.config?.hostname
+        ? [{ id: `remote-${ctx.config.hostname}`, label: "Remote" }]
+        : [],
+    );
+    const refreshModels = vi.fn(async () => [{ id: "refreshed", label: "Refreshed" }]);
+    const listModelProfiles = vi.fn(async () => [
+      {
+        key: "cheap" as const,
+        label: "Cheap",
+        adapterConfig: { model: "remote-mini" },
+        source: "adapter_default" as const,
+      },
+    ]);
+    registerServerAdapter({
+      ...externalAdapter,
+      listModels,
+      refreshModels,
+      listModelProfiles,
+    });
+
+    const ctx: AdapterDiscoveryContext = {
+      agentId: "agent-1",
+      companyId: "co-1",
+      adapterType: "external_test",
+      config: { hostname: "10.0.0.9" },
+    };
+
+    await expect(listAdapterModels("external_test", ctx)).resolves.toEqual([
+      { id: "remote-10.0.0.9", label: "Remote" },
+    ]);
+    expect(listModels).toHaveBeenCalledWith(ctx);
+
+    await expect(refreshAdapterModels("external_test", ctx)).resolves.toEqual([
+      { id: "refreshed", label: "Refreshed" },
+    ]);
+    expect(refreshModels).toHaveBeenCalledWith(ctx);
+
+    await expect(listAdapterModelProfiles("external_test", ctx)).resolves.toEqual([
+      {
+        key: "cheap",
+        label: "Cheap",
+        adapterConfig: { model: "remote-mini" },
+        source: "adapter_default",
+      },
+    ]);
+    expect(listModelProfiles).toHaveBeenCalledWith(ctx);
+  });
+
+  it("keeps legacy zero-arg discovery hooks working when no context is supplied", async () => {
+    const listModels = vi.fn(async () => [{ id: "default-model", label: "Default" }]);
+    registerServerAdapter({
+      ...externalAdapter,
+      listModels,
+    });
+
+    await expect(listAdapterModels("external_test")).resolves.toEqual([
+      { id: "default-model", label: "Default" },
+    ]);
+    expect(listModels).toHaveBeenCalledWith(undefined);
   });
 
   it("allows external plugin to override a built-in adapter type", () => {

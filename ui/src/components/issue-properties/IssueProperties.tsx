@@ -583,9 +583,11 @@ export function IssueProperties({
   const { data: assigneeAdapterModels } = useQuery({
     queryKey:
       companyId && assigneeAdapterType
-        ? queryKeys.agents.adapterModels(companyId, assigneeAdapterType)
+        ? queryKeys.agents.adapterModels(companyId, assigneeAdapterType, null, null, issue.assigneeAgentId)
         : ["agents", "none", "adapter-models", assigneeAdapterType ?? "none"],
-    queryFn: () => agentsApi.adapterModels(companyId!, assigneeAdapterType!),
+    queryFn: () => agentsApi.adapterModels(companyId!, assigneeAdapterType!, {
+      agentId: issue.assigneeAgentId ?? undefined,
+    }),
     enabled: Boolean(companyId) && showAssigneeAdapterOptions && supportsAssigneeOverrides,
   });
   const { data: assigneeCheapProfiles } = useQuery({
