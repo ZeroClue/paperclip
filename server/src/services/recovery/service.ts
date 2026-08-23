@@ -92,10 +92,23 @@ import {
   DISPOSITION_REPAIR_MAX_ATTEMPTS,
 } from "./disposition-repair.js";
 
+import {
+  ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS,
+  ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS,
+  OUTPUT_SILENCE_SCAN_CANDIDATE_WINDOW_MS,
+  agentConfiguredTimeoutSec,
+  resolveRunOutputSilenceThresholds,
+  type RunOutputSilenceThresholds,
+} from "./output-silence-thresholds.js";
+
+// Re-exported for existing consumers (heartbeat service surface + tests).
+export {
+  ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS,
+  ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS,
+} from "./output-silence-thresholds.js";
+
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["interrupted", "failed", "cancelled", "timed_out"] as const;
-export const ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS = 60 * 60 * 1000;
-export const ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS = 4 * 60 * 60 * 1000;
 export const ACTIVE_RUN_OUTPUT_CONTINUE_REARM_MS = 30 * 60 * 1000;
 export const DEFAULT_LIVENESS_REESCALATION_COOLDOWN_MS = 60 * 60 * 1000;
 const ACTIVE_RUN_OUTPUT_EVIDENCE_TAIL_BYTES = 8 * 1024;
@@ -1498,23 +1511,32 @@ async function isAgentInvokable(agent: typeof agents.$inferSelect | null | undef
   async function buildRunOutputSilence(
     run: Pick<
       typeof heartbeatRuns.$inferSelect,
-      "id" | "companyId" | "status" | "lastOutputAt" | "lastOutputSeq" | "lastOutputStream" | "processStartedAt" | "startedAt" | "createdAt"
+      "id" | "companyId" | "agentId" | "status" | "lastOutputAt" | "lastOutputSeq" | "lastOutputStream" | "processStartedAt" | "startedAt" | "createdAt"
     >,
     now = new Date(),
   ): Promise<RunOutputSilenceSummary> {
-    const [quietUntilDecision, evaluation] = await Promise.all([
+    const [quietUntilDecision, evaluation, agentRow] = await Promise.all([
       latestActiveOutputQuietUntilDecision(run.companyId, run.id, now),
       findOpenStaleRunEvaluation(run.companyId, run.id),
+      db
+        .select({ adapterConfig: agents.adapterConfig })
+        .from(agents)
+        .where(eq(agents.id, run.agentId))
+        .limit(1)
+        .then((rows) => rows[0] ?? null),
     ]);
+    // Thresholds scale with this agent's finite adapter timeoutSec so silent
+    // runs surface before the adapter wall-clock timeout kills them (COO-777).
+    const thresholds = resolveRunOutputSilenceThresholds(agentConfiguredTimeoutSec(agentRow?.adapterConfig));
     const silenceStartedAt = silenceStartedAtForRun(run);
     const silenceAgeMs = run.status === "running" ? silenceAgeMsForRun(run, now) : null;
     const level = run.status !== "running"
       ? "not_applicable"
       : quietUntilDecision
         ? "snoozed"
-        : (silenceAgeMs ?? 0) >= ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS
+        : (silenceAgeMs ?? 0) >= thresholds.criticalThresholdMs
           ? "critical"
-          : (silenceAgeMs ?? 0) >= ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS
+          : (silenceAgeMs ?? 0) >= thresholds.suspicionThresholdMs
             ? "suspicious"
             : "ok";
     return {
@@ -1526,8 +1548,8 @@ async function isAgentInvokable(agent: typeof agents.$inferSelect | null | undef
       silenceStartedAt,
       silenceAgeMs,
       level,
-      suspicionThresholdMs: ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS,
-      criticalThresholdMs: ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS,
+      suspicionThresholdMs: thresholds.suspicionThresholdMs,
+      criticalThresholdMs: thresholds.criticalThresholdMs,
       snoozedUntil: quietUntilDecision?.snoozedUntil ?? null,
       evaluationIssueId: evaluation?.id ?? null,
       evaluationIssueIdentifier: evaluation?.identifier ?? null,
@@ -1980,6 +2002,7 @@ async function isAgentInvokable(agent: typeof agents.$inferSelect | null | undef
     prefix: string;
     evidence: Awaited<ReturnType<typeof collectStaleRunEvidence>>;
     level: "suspicious" | "critical";
+    thresholds: RunOutputSilenceThresholds;
     now: Date;
   }) {
     const sourceIssue = input.sourceIssue
@@ -2014,7 +2037,7 @@ async function isAgentInvokable(agent: typeof agents.$inferSelect | null | undef
       `- Last output at: ${input.run.lastOutputAt?.toISOString() ?? "none recorded"}`,
       `- Last output sequence: ${input.run.lastOutputSeq ?? 0}`,
       `- Silent for: ${formatDuration(input.evidence.silenceAgeMs)}`,
-      `- Thresholds: suspicious after ${formatDuration(ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS)}, critical after ${formatDuration(ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS)}`,
+      `- Thresholds: suspicious after ${formatDuration(input.thresholds.suspicionThresholdMs)}, critical after ${formatDuration(input.thresholds.criticalThresholdMs)}`,
       `- Process metadata: pid \`${input.run.processPid ?? "unknown"}\`, process group \`${input.run.processGroupId ?? "unknown"}\`, in-memory handle \`${runningProcesses.has(input.run.id) ? "yes" : "no"}\``,
       "",
       "## Last Output Excerpt",
@@ -2114,6 +2137,14 @@ async function isAgentInvokable(agent: typeof agents.$inferSelect | null | undef
   }) {
     const runningAgent = await getAgent(input.run.agentId);
     if (!runningAgent || runningAgent.companyId !== input.run.companyId) return { kind: "skipped" as const };
+    // The scan prefilter casts a deliberately wide net (smallest possible scaled
+    // suspicion), so candidates may still be below *this* agent's own thresholds —
+    // e.g. an unconfigured agent (legacy 60min window) silent for 20 minutes. Gate
+    // here so per-run thresholds stay authoritative.
+    const silenceThresholds = resolveRunOutputSilenceThresholds(agentConfiguredTimeoutSec(runningAgent.adapterConfig));
+    if ((silenceAgeMsForRun(input.run, input.now) ?? 0) < silenceThresholds.suspicionThresholdMs) {
+      return { kind: "skipped" as const };
+    }
     const sourceIssue = await resolveStaleRunSourceIssue(input.run);
     const existing = await findOpenStaleRunEvaluation(input.run.companyId, input.run.id);
     if (sourceIssue && isRecoveryOriginIssue(sourceIssue)) {
@@ -2223,7 +2254,8 @@ async function isAgentInvokable(agent: typeof agents.$inferSelect | null | undef
       prefix,
       now: input.now,
     });
-    const level = (evidence.silenceAgeMs ?? 0) >= ACTIVE_RUN_OUTPUT_CRITICAL_THRESHOLD_MS ? "critical" : "suspicious";
+    const level =
+      (evidence.silenceAgeMs ?? 0) >= silenceThresholds.criticalThresholdMs ? "critical" : "suspicious";
     if (existing) {
       if (level === "critical" && existing.priority !== "high") {
         await issuesSvc.update(existing.id, {
@@ -2261,6 +2293,7 @@ async function isAgentInvokable(agent: typeof agents.$inferSelect | null | undef
       prefix,
       evidence,
       level,
+      thresholds: silenceThresholds,
       now: input.now,
     });
     let evaluation: Awaited<ReturnType<typeof issuesSvc.create>>;
@@ -2339,7 +2372,10 @@ async function isAgentInvokable(agent: typeof agents.$inferSelect | null | undef
 
   async function scanSilentActiveRuns(opts?: { now?: Date; companyId?: string; issueCreatedAtGte?: Date | null }) {
     const now = opts?.now ?? new Date();
-    const suspicionBefore = new Date(now.getTime() - ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS);
+    // Cast a deliberately wide net: scaled per-agent suspicion windows (COO-777)
+    // can be far below the legacy constant, so prefilter on the smallest possible
+    // threshold and let createOrUpdateStaleRunEvaluation apply each run's own.
+    const suspicionBefore = new Date(now.getTime() - OUTPUT_SILENCE_SCAN_CANDIDATE_WINDOW_MS);
     let candidates = await db
       .select()
       .from(heartbeatRuns)
