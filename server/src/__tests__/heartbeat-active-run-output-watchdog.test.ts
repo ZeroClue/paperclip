@@ -131,6 +131,7 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
     sourceStatus?: "in_progress" | "done" | "cancelled";
     sourceOriginKind?: string;
     sameRunTerminalEvidence?: "activity" | "comment";
+    coderTimeoutSec?: number;
   }) {
     const companyId = randomUUID();
     const managerId = randomUUID();
@@ -170,7 +171,7 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
         status: "running",
         reportsTo: managerId,
         adapterType: "codex_local",
-        adapterConfig: {},
+        adapterConfig: opts.coderTimeoutSec !== undefined ? { timeoutSec: opts.coderTimeoutSec } : {},
         runtimeConfig: {},
         permissions: {},
       },
@@ -286,6 +287,80 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
     });
     expect(evaluations[0]?.description).toContain("Decision Checklist");
     expect(evaluations[0]?.description).not.toContain("sk-test-secret-value");
+  });
+
+  it("surfaces silence for timeout-bounded agents below the legacy suspicion window", async () => {
+    // COO-777: with adapterConfig.timeoutSec=3600 the legacy 60min suspicion
+    // window could never fire before the adapter timeout killed a silent run.
+    // Scaled thresholds must flag an 11-minute silent run instead.
+    const now = new Date("2026-04-22T20:00:00.000Z");
+    const { companyId, runId } = await seedRunningRun({
+      now,
+      ageMs: 11 * 60 * 1000,
+      coderTimeoutSec: 3600,
+    });
+    const heartbeat = heartbeatService(db);
+
+    const scan = await heartbeat.scanSilentActiveRuns({ now, companyId });
+    expect(scan.created).toBe(1);
+
+    const evaluations = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "stale_active_run_evaluation")));
+    expect(evaluations).toHaveLength(1);
+    expect(evaluations[0]).toMatchObject({ priority: "medium" });
+    expect(evaluations[0]?.description).toContain("suspicious after 10m");
+
+    const [run] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId));
+    await expect(heartbeat.buildRunOutputSilence(run, now)).resolves.toMatchObject({
+      level: "suspicious",
+      suspicionThresholdMs: 10 * 60 * 1000,
+      criticalThresholdMs: 40 * 60 * 1000,
+    });
+  });
+
+  it("keeps unconfigured agents on the legacy suspicion window", async () => {
+    // Without a configured timeoutSec there is no budget to surface ahead of:
+    // a 20-minute silent run stays "ok" and must not create an evaluation.
+    const now = new Date("2026-04-22T20:00:00.000Z");
+    const { companyId } = await seedRunningRun({
+      now,
+      ageMs: 20 * 60 * 1000,
+    });
+    const heartbeat = heartbeatService(db);
+
+    const scan = await heartbeat.scanSilentActiveRuns({ now, companyId });
+    expect(scan.created).toBe(0);
+    expect(scan.skipped).toBe(1);
+
+    const evaluations = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "stale_active_run_evaluation")));
+    expect(evaluations).toHaveLength(0);
+  });
+
+  it("escalates timeout-bounded silent runs to critical inside their budget", async () => {
+    // Scaled critical for timeoutSec=3600 is 40min: a 41-minute silent run is
+    // critical (high priority) while the legacy critical threshold is 4h.
+    const now = new Date("2026-04-22T20:00:00.000Z");
+    const { companyId } = await seedRunningRun({
+      now,
+      ageMs: 41 * 60 * 1000,
+      coderTimeoutSec: 3600,
+    });
+    const heartbeat = heartbeatService(db);
+
+    const scan = await heartbeat.scanSilentActiveRuns({ now, companyId });
+    expect(scan.created).toBe(1);
+
+    const evaluations = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "stale_active_run_evaluation")));
+    expect(evaluations).toHaveLength(1);
+    expect(evaluations[0]).toMatchObject({ priority: "high" });
   });
 
   it("redacts sensitive values from actual run-log evidence", async () => {
@@ -684,12 +759,14 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
     const noisyResult = await heartbeat.scanSilentActiveRuns({ now, companyId: noisy.companyId });
 
     expect(staleResult).toMatchObject({ created: 0, snoozed: 1 });
-    expect(noisyResult).toMatchObject({ scanned: 0, created: 0 });
+    // The widened candidate window scans the 5-minute-fresh noisy run, but its
+    // agent has no finite timeoutSec, so the legacy 60min threshold gates it out.
+    expect(noisyResult).toMatchObject({ scanned: 1, created: 0, skipped: 1 });
   });
 
   it("records watchdog decisions through recovery owner authorization", async () => {
     const now = new Date("2026-04-22T20:00:00.000Z");
-    const { companyId, managerId, runId } = await seedRunningRun({
+    const { companyId, managerId, coderId, runId } = await seedRunningRun({
       now,
       ageMs: ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS + 60_000,
     });
@@ -729,6 +806,7 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
     await expect(recovery.buildRunOutputSilence({
       id: runId,
       companyId,
+      agentId: coderId,
       status: "running",
       lastOutputAt: null,
       lastOutputSeq: 0,
