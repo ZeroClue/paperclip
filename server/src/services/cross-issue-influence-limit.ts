@@ -43,6 +43,81 @@ function readRunSourceIssueId(contextSnapshot: unknown) {
   return null;
 }
 
+/**
+ * Stamps the checked-out issue onto a run's context snapshot as its source
+ * issue.
+ *
+ * Timer/maintenance wakes intentionally start unscoped ("unscoped timer wake
+ * starts fresh"): their context snapshot carries no `issueId`, so every issue
+ * write from such a run fails closed with
+ * `cross_issue_influence_run_context_required` — the run cannot leave durable
+ * progress notes even on the one issue it is working.
+ *
+ * Checkout is the moment an unscoped run binds itself to exactly one issue:
+ * the route already enforces "agent can only checkout as itself", so the run
+ * row is unambiguous. From then on the middleware treats writes to that issue
+ * as same-issue and counts only genuinely cross-issue attempts against the
+ * cap — the guard's fail-closed posture is unchanged.
+ *
+ * Never re-scopes: if the snapshot already carries a source (`issueId` or
+ * `taskId`) it is left untouched, so a scoped run cannot launder its scope or
+ * cap history by checking out another issue.
+ */
+export async function stampRunSourceIssueContext(
+  db: Db,
+  input: {
+    runId: string;
+    agentId: string;
+    companyId: string;
+    issueId: string;
+  },
+): Promise<boolean> {
+  // Same validation the observer applies to the header-supplied run id before
+  // it may reach PostgreSQL.
+  if (!isUuidLike(input.runId)) return false;
+
+  return db.transaction(async (tx) => {
+    const run = await tx
+      .select({
+        id: heartbeatRuns.id,
+        companyId: heartbeatRuns.companyId,
+        agentId: heartbeatRuns.agentId,
+        contextSnapshot: heartbeatRuns.contextSnapshot,
+      })
+      .from(heartbeatRuns)
+      .where(and(
+        eq(heartbeatRuns.id, input.runId),
+        eq(heartbeatRuns.companyId, input.companyId),
+        eq(heartbeatRuns.agentId, input.agentId),
+      ))
+      .for("update")
+      .then((rows) => rows[0] ?? null);
+    if (!run) return false;
+
+    const context = (run.contextSnapshot && typeof run.contextSnapshot === "object" && !Array.isArray(run.contextSnapshot)
+      ? run.contextSnapshot
+      : {}) as Record<string, unknown>;
+    if (readRunSourceIssueId(context)) return false;
+
+    await tx
+      .update(heartbeatRuns)
+      .set({ contextSnapshot: { ...context, issueId: input.issueId } })
+      .where(eq(heartbeatRuns.id, run.id));
+
+    logger.info(
+      {
+        event: "run_source_issue_stamped",
+        companyId: input.companyId,
+        runId: input.runId,
+        agentId: input.agentId,
+        issueId: input.issueId,
+      },
+      "run source issue stamped from checkout",
+    );
+    return true;
+  });
+}
+
 export function evaluateCrossIssueInfluenceLimit(input: {
   priorCount: number;
   now?: Date;
