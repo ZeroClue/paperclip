@@ -250,6 +250,7 @@ import {
   crossIssueInfluenceLimitError,
   crossIssueInfluenceRunContextError,
   observeCrossIssueInfluence,
+  stampRunSourceIssueContext,
   type CrossIssueInfluenceKind,
 } from "../services/cross-issue-influence-limit.js";
 
@@ -11048,6 +11049,21 @@ export function issueRoutes(
       throw error;
     }
     const actor = getActorInfo(req);
+    // A bare timer/maintenance wake starts with no source issue in its run
+    // context, which made every subsequent comment/PATCH from that run fail
+    // closed (`cross_issue_influence_run_context_required`). Checkout binds the
+    // run to exactly one issue, so give the CURRENT run row that source issue
+    // instead of only stamping it onto a future assignee wakeup.
+    if (req.actor.type === "agent" && checkoutRunId) {
+      await stampRunSourceIssueContext(db, {
+        runId: checkoutRunId,
+        agentId: req.body.agentId,
+        companyId: issue.companyId,
+        issueId: issue.id,
+      }).catch((err) =>
+        logger.warn({ err, issueId: issue.id, runId: checkoutRunId }, "failed to stamp run source issue on checkout")
+      );
+    }
     if (updated?.harnessKind === "skill_test") {
       await companySkillsSvc.markTestRunRunning(updated.companyId, updated.id);
     }
