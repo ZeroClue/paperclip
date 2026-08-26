@@ -1,6 +1,6 @@
 import { and, count, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { activityLog, heartbeatRuns } from "@paperclipai/db";
+import { activityLog, heartbeatRuns, issues } from "@paperclipai/db";
 import { isUuidLike, issueWriteDenialResponse } from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
 import { logger } from "../middleware/logger.js";
@@ -141,6 +141,10 @@ export function evaluateCrossIssueInfluenceLimit(input: {
  * observation is intentionally recorded before the route mutation: once the
  * rollout reaches enforcement, failures cannot be used to race or probe past
  * the fail-closed backstop.
+ *
+ * An unscoped snapshot is not automatically a refusal: if the run currently
+ * holds the target issue's checkout, it scoped itself at pickup and the write
+ * is same-issue. Everything else still fails closed.
  */
 export async function observeCrossIssueInfluence(
   db: Db,
@@ -158,6 +162,9 @@ export async function observeCrossIssueInfluence(
   // API-key callers control the run header. Reject malformed UUIDs before the
   // database can turn an untrusted identifier into a PostgreSQL cast error.
   if (!isUuidLike(input.runId)) throw crossIssueInfluenceRunContextError();
+  // The checkout-scope fallback compares this against issues.id (uuid), so it
+  // must be a well-formed UUID too.
+  if (!isUuidLike(input.targetIssueId)) throw crossIssueInfluenceRunContextError();
 
   return db.transaction(async (tx) => {
     const run = await tx
@@ -185,7 +192,37 @@ export async function observeCrossIssueInfluence(
     }
 
     const sourceIssueId = readRunSourceIssueId(run.contextSnapshot);
-    if (!sourceIssueId) throw crossIssueInfluenceRunContextError();
+    if (!sourceIssueId) {
+      // Bare timer/maintenance wakes intentionally start with an unscoped
+      // snapshot. Checkout is the moment such a run binds itself to exactly
+      // one issue, so a run that currently holds the target issue's checkout
+      // IS scoped to it: treat the write as same-issue. Read without a row
+      // lock — checkout commits atomically and a stale read only keeps the
+      // fail-closed throw below.
+      const checkedOutRunId = await tx
+        .select({ checkoutRunId: issues.checkoutRunId })
+        .from(issues)
+        .where(and(
+          eq(issues.companyId, input.companyId),
+          eq(issues.id, input.targetIssueId),
+        ))
+        .then((rows) => rows[0]?.checkoutRunId ?? null);
+      if (checkedOutRunId === input.runId) {
+        logger.info(
+          {
+            event: "cross_issue_influence_checkout_scope",
+            companyId: input.companyId,
+            runId: input.runId,
+            agentId: input.agentId,
+            targetIssueId: input.targetIssueId,
+            kind: input.kind,
+          },
+          "unscoped run write allowed via held checkout",
+        );
+        return null;
+      }
+      throw crossIssueInfluenceRunContextError();
+    }
     if (
       sourceIssueId === input.targetIssueId ||
       (input.targetIssueIdentifier && sourceIssueId.toUpperCase() === input.targetIssueIdentifier.toUpperCase())
